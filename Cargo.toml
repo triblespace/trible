@@ -1,6 +1,6 @@
 [package]
 name = "trible"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["<jp@bultmann.eu>"]
 edition = "2018"
 description = "Command line utility for the tribles knowledge base."
