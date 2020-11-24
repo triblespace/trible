@@ -1,7 +1,7 @@
 [package]
 name = "trible"
 version = "0.1.0"
-authors = ["Jan-Paul Bultmann <jp@bultmann.eu>"]
+authors = ["<jp@bultmann.eu>"]
 edition = "2018"
 description = "Command line utility for the tribles knowledge base."
 homepage = "https://tribles.space"
