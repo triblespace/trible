@@ -1,12 +1,34 @@
 [package]
 name = "trible"
 version = "0.1.1"
-authors = ["<jp@bultmann.eu>"]
+authors = ["⚫️ <jp@bultmann.eu>"]
 edition = "2018"
-description = "Command line utility for the tribles knowledge base."
+description = "CLI for Tribles, a simple but versatile data and knowledge space."
 homepage = "https://tribles.space"
+repository = "https://github.com/triblesspace/trible"
 license = "MIT"
+readme = "README.md"
+#TODO: Add more tags and proper categories.
+keywords = ["cli", "tribles"]
+categories = ["command-line-utilities"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+structopt = "0.3.21"
+anyhow = "1.0.34"
+futures-util = "0.3.8"
+tungstenite = "0.11.1"
+tokio-tungstenite = "0.12.0"
+tokio = { version = "0.3.5", features = ["full"] }
+tokio-util = "0.5.1"
+bytes = "0.6.0"
+futures = "0.3.8"
+blake2s_simd = "0.5.11"
+
+[dev-dependencies]
+assert_cmd = "1.0.2"
+predicates = "1.0.5"
+tempfile = "3"
+proptest = "0.10.1"
+# TODO: Add fuzzing https://rust-fuzz.github.io/book/cargo-fuzz/setup.html
