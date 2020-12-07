@@ -4,7 +4,7 @@ use std::io::Result;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-struct Trible([u8; Trible::SIZE]);
+pub struct Trible([u8; Trible::SIZE]);
 
 impl Trible {
     pub const ENTITY_SIZE: usize = 16;

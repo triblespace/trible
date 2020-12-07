@@ -1,3 +1,6 @@
+pub mod transaction;
+pub mod trible;
+
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use futures::future;
@@ -17,7 +20,6 @@ use tokio::sync::watch;
 use tokio_tungstenite::{accept_async, client_async, WebSocketStream};
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tungstenite::Message;
-mod transaction;
 
 #[derive(StructOpt)]
 /// A simple but versatile data and knowledge space
