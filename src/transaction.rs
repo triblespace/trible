@@ -1,5 +1,6 @@
 use super::trible::Trible;
 use blake2s_simd::{blake2s, Hash, Params, State};
+use bytes::Buf;
 use bytes::Bytes;
 use bytes::BytesMut;
 use std::convert::TryInto;
@@ -15,6 +16,8 @@ pub struct TransactionCodec {
     txn_size: usize,
 }
 
+const ZEROS: [u8; Trible::TXN_ZEROS] = [0; Trible::TXN_ZEROS];
+
 impl Transaction {
     pub fn validate(&self) -> Result<[u8; 32], &'static str> {
         if self.0.len() == 0 {
@@ -23,11 +26,11 @@ impl Transaction {
         if self.0.len() % Trible::SIZE != 0 {
             return Err("Transaction size needs to be a multiple of trible size.");
         }
-        if &(self.0)[0..Trible::TXN_ZEROS] != zeros {
+        if (self.0)[0..Trible::TXN_ZEROS] != ZEROS {
             return Err("Transaction doesn't start with transaction trible.");
         }
         let hash = &(self.0)[Trible::VALUE_START..Trible::SIZE];
-        let hash_state = Params::new().hash_length(32).to_state();
+        let mut hash_state = Params::new().hash_length(32).to_state();
         hash_state.update(&(self.0)[Trible::SIZE..]);
         if hash != hash_state.finalize().as_bytes() {
             return Err("Transaction trible hash does not match computed hash.");
@@ -42,8 +45,6 @@ impl Transaction {
             .unwrap();
     }
 }
-
-static zeros: &[u8] = &[0; Trible::TXN_ZEROS][..];
 
 impl TransactionCodec {
     pub fn new() -> TransactionCodec {
@@ -63,7 +64,7 @@ impl Decoder for TransactionCodec {
         match self.txn_hash {
             None => {
                 while self.txn_size + Trible::SIZE <= src.len() {
-                    if &src[self.txn_size..self.txn_size + Trible::TXN_ZEROS] == zeros {
+                    if src[self.txn_size..self.txn_size + Trible::TXN_ZEROS] == ZEROS {
                         self.txn_hash = Some(
                             (&src[self.txn_size + Trible::VALUE_START
                                 ..self.txn_size + Trible::SIZE])
@@ -74,7 +75,7 @@ impl Decoder for TransactionCodec {
                             self.txn_size = Trible::SIZE;
                             return Ok(None);
                         } else {
-                            src.split_to(self.txn_size);
+                            src.advance(self.txn_size);
                             self.txn_size = Trible::SIZE;
                             return Ok(Some(Err(
                                 "Transaction doesn't begin with transaction trible.",
@@ -97,8 +98,8 @@ impl Decoder for TransactionCodec {
                     if !(self.txn_size + Trible::SIZE <= src.len()) {
                         break;
                     }
-                    if &src[self.txn_size..self.txn_size + Trible::TXN_ZEROS] == zeros {
-                        src.split_to(self.txn_size);
+                    if src[self.txn_size..self.txn_size + Trible::TXN_ZEROS] == ZEROS {
+                        src.advance(self.txn_size);
                         self.hash_state = Params::new().hash_length(32).to_state();
                         self.txn_hash = None;
                         self.txn_size = 0;
