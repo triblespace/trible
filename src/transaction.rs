@@ -8,6 +8,7 @@ use tokio::io;
 use tokio_util::codec::Decoder;
 
 /// A transaction is set of tribles atomically added to the log.
+#[derive(Debug)]
 pub struct Transaction(pub Bytes);
 
 pub struct TransactionCodec {
