@@ -49,23 +49,23 @@ enum TribleCli {
     Diagnose {},
 }
 
-struct Txn<'a> {
-    hash: [u8; 32],
-    data: &'a [u8],
-}
-
 async fn on_incoming(
     addr: SocketAddr,
     incoming: SplitStream<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>>,
-    storage_tx: mpsc::Sender<Txn<'_>>,
+    storage_tx: mpsc::Sender<transaction::Transaction>,
 ) {
     let broadcast_incoming = incoming.try_for_each(|msg| {
-        println!(
-            "Received a message from {}: {}",
-            addr,
-            msg.to_text().unwrap()
-        );
-        future::ok(())
+        let txn = transaction::Transaction(msg.into_data().into());
+        match txn.validate() {
+            Ok(hash) => {
+                storage_tx.send(txn);
+                return future::ok(());
+            }
+            Err(e) => {
+                //TODO add logging.
+                return future::ok(());
+            }
+        }
     });
 }
 
@@ -85,19 +85,15 @@ async fn on_outgoing(
         .await
         .unwrap();
 
-    let txn_stream = FramedRead::new(read_log, BytesCodec::new());
+    let txn_stream = FramedRead::new(read_log, transaction::TransactionCodec::new());
     while let Ok(()) = latest_txn_rx.changed().await {
-        let latest = (*latest_txn_rx.borrow()).clone();
+        let latest = { (*latest_txn_rx.borrow()).clone() };
         match latest {
             None => {}
             Some(hash) => {
-                let mut txn = Vec::new();
-                let trible = [0; 64];
-                read_log.read_exact(&mut trible);
-                Message::Binary(txn);
-                write_log.write_all(txn.data).await.unwrap();
-                write_log.flush().await.unwrap();
-                latest_txn_tx.send(Some(txn.hash)).unwrap();
+                while let Ok(()) = txn_stream.recv().await {
+                    Message::Binary(txn);
+                }
             }
         }
     }

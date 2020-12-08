@@ -3,12 +3,11 @@ use blake2s_simd::{blake2s, Hash, Params, State};
 use bytes::Bytes;
 use bytes::BytesMut;
 use std::convert::TryInto;
+use tokio::io;
 use tokio_util::codec::Decoder;
 
 /// A transaction is set of tribles atomically added to the log.
-struct Transaction(Bytes);
-
-static zeros: &[u8] = &[0; Trible::TXN_ZEROS][..];
+pub struct Transaction(pub Bytes);
 
 pub struct TransactionCodec {
     hash_state: State,
@@ -16,11 +15,36 @@ pub struct TransactionCodec {
     txn_size: usize,
 }
 
+impl Transaction {
+    pub fn validate(&self) -> Result<[u8; 32], &'static str> {
+        if self.0.len() == 0 {
+            return Err("Transaction is empty and doesn't contain an transaction trible.");
+        }
+        if self.0.len() % Trible::SIZE != 0 {
+            return Err("Transaction size needs to be a multiple of trible size.");
+        }
+        if &(self.0)[0..Trible::TXN_ZEROS] != zeros {
+            return Err("Transaction doesn't start with transaction trible.");
+        }
+        let hash = &(self.0)[Trible::VALUE_START..Trible::SIZE];
+        let hash_state = Params::new().hash_length(32).to_state();
+        hash_state.update(&(self.0)[Trible::SIZE..]);
+        if hash != hash_state.finalize().as_bytes() {
+            return Err("Transaction trible hash does not match computed hash.");
+        }
+        return Ok((&(self.0)[Trible::VALUE_START..Trible::SIZE])
+            .try_into()
+            .unwrap());
+    }
+}
+
+static zeros: &[u8] = &[0; Trible::TXN_ZEROS][..];
+
 impl TransactionCodec {
-    fn new() -> TransactionCodec {
-        let state = Params::new().hash_length(32).to_state();
+    pub fn new() -> TransactionCodec {
+        let hash_state = Params::new().hash_length(32).to_state();
         TransactionCodec {
-            hash_state: state,
+            hash_state,
             txn_hash: None,
             txn_size: 0,
         }
