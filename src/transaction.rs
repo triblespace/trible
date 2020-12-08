@@ -36,6 +36,11 @@ impl Transaction {
             .try_into()
             .unwrap());
     }
+    pub fn try_hash(&self) -> [u8; 32] {
+        return (&(self.0)[Trible::VALUE_START..Trible::SIZE])
+            .try_into()
+            .unwrap();
+    }
 }
 
 static zeros: &[u8] = &[0; Trible::TXN_ZEROS][..];

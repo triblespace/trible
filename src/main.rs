@@ -54,45 +54,57 @@ async fn on_incoming(
     incoming: SplitStream<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>>,
     storage_tx: mpsc::Sender<transaction::Transaction>,
 ) {
-    let broadcast_incoming = incoming.try_for_each(|msg| {
+    incoming.try_for_each(|msg| {
         let txn = transaction::Transaction(msg.into_data().into());
         match txn.validate() {
             Ok(hash) => {
                 storage_tx.send(txn);
-                return future::ok(());
             }
             Err(e) => {
-                //TODO add logging.
-                return future::ok(());
+                eprintln!("Received bad Transaction from {}: {}", addr, e);
             }
         }
+        return future::ok(());
     });
 }
 
 async fn on_outgoing(
     addr: SocketAddr,
-    outgoing: SplitSink<
+    mut outgoing: SplitSink<
         tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
         tungstenite::Message,
     >,
     write_to: PathBuf,
     mut latest_txn_rx: watch::Receiver<Option<[u8; 32]>>,
 ) {
-    let mut read_log = OpenOptions::new()
+    let read_log = OpenOptions::new()
         .write(false)
         .read(true)
         .open(write_to)
         .await
         .unwrap();
 
-    let txn_stream = FramedRead::new(read_log, transaction::TransactionCodec::new());
+    let mut txn_stream = FramedRead::new(read_log, transaction::TransactionCodec::new());
     while let Ok(()) = latest_txn_rx.changed().await {
         let latest = { (*latest_txn_rx.borrow()).clone() };
         match latest {
             None => {}
             Some(hash) => {
-                while let Ok(()) = txn_stream.recv().await {
-                    Message::Binary(txn);
+                'log_loop: while let Some(txn) = txn_stream.next().await {
+                    match txn.unwrap() {
+                        //TODO handle file errors.
+                        Ok(txn) => {
+                            outgoing.send(Message::Binary(txn.0.to_vec())).await;
+                            if hash == txn.try_hash() {
+                                break 'log_loop;
+                            }
+                            continue;
+                        }
+                        Err(e) => {
+                            eprintln!("Bad Transaction in log: {}", e);
+                            continue;
+                        }
+                    }
                 }
             }
         }
@@ -105,7 +117,7 @@ async fn main() -> Result<()> {
     match args {
         TribleCli::Archive { write_to, serve_on } => {
             let write_to_storage = write_to.clone();
-            let (storage_tx, mut storage_rx) = mpsc::channel::<Txn>(16);
+            let (storage_tx, mut storage_rx) = mpsc::channel::<transaction::Transaction>(16);
             let (latest_txn_tx, latest_txn_rx) = watch::channel::<Option<[u8; 32]>>(None);
             let mut write_log = OpenOptions::new()
                 .create(true)
@@ -116,9 +128,9 @@ async fn main() -> Result<()> {
                 .unwrap();
             let storage_task = tokio::spawn(async move {
                 while let Some(txn) = storage_rx.recv().await {
-                    write_log.write_all(txn.data).await.unwrap();
+                    write_log.write_all(&txn.0[..]).await.unwrap();
                     write_log.flush().await.unwrap();
-                    latest_txn_tx.send(Some(txn.hash)).unwrap();
+                    latest_txn_tx.send(Some(txn.try_hash())).unwrap();
                 }
             });
             // Create the event loop and TCP listener we'll accept connections on.
