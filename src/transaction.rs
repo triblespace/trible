@@ -11,10 +11,12 @@ use tokio_util::codec::Decoder;
 #[derive(Debug)]
 pub struct Transaction(pub Bytes);
 
+//TODO Add internal state machine enum.
 pub struct TransactionCodec {
     hash_state: State,
     txn_hash: Option<[u8; 32]>,
     txn_size: usize,
+    in_bad_txn: bool,
 }
 
 const ZEROS: [u8; Trible::TXN_ZEROS] = [0; Trible::TXN_ZEROS];
@@ -54,6 +56,7 @@ impl TransactionCodec {
             hash_state,
             txn_hash: None,
             txn_size: 0,
+            in_bad_txn: false,
         }
     }
 }
@@ -62,57 +65,72 @@ impl Decoder for TransactionCodec {
     type Item = Result<Transaction, &'static str>;
     type Error = io::Error;
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        match self.txn_hash {
-            None => {
-                while self.txn_size + Trible::SIZE <= src.len() {
-                    if src[self.txn_size..self.txn_size + Trible::TXN_ZEROS] == ZEROS {
-                        self.txn_hash = Some(
-                            (&src[self.txn_size + Trible::VALUE_START
-                                ..self.txn_size + Trible::SIZE])
-                                .try_into()
-                                .unwrap(),
-                        ); // Probably requires copy for borrow checker.
-                        if self.txn_size == 0 {
-                            self.txn_size = Trible::SIZE;
-                            return Ok(None);
-                        } else {
-                            src.advance(self.txn_size);
-                            self.txn_size = Trible::SIZE;
-                            return Ok(Some(Err(
-                                "Transaction doesn't begin with transaction trible.",
-                            )));
-                        }
-                    } else {
-                        self.txn_size += Trible::SIZE;
-                    }
+        loop {
+            let can_read = self.txn_size + Trible::SIZE <= src.len();
+            eprintln!("Decoder: Loop {} {}", src.len(), self.txn_size);
+            let at_txn_trible =
+                can_read && src[self.txn_size..self.txn_size + Trible::TXN_ZEROS] == ZEROS;
+            let at_end = src.len() == 0;
+            let in_bad_txn = self.in_bad_txn;
+            match self.txn_hash {
+                Some(hash) if hash == self.hash_state.finalize().as_bytes() => {
+                    eprintln!("Decoder: Has valid.");
+                    let txn = Transaction(src.split_to(self.txn_size).freeze());
+                    self.hash_state = Params::new().hash_length(32).to_state();
+                    self.txn_hash = None;
+                    self.txn_size = 0;
+                    return Ok(Some(Ok(txn)));
                 }
-            }
-            Some(hash) => {
-                loop {
-                    if hash == self.hash_state.finalize().as_bytes() {
-                        let txn = Transaction(src.split_to(self.txn_size).freeze());
-                        self.hash_state = Params::new().hash_length(32).to_state();
-                        self.txn_hash = None;
-                        self.txn_size = 0;
-                        return Ok(Some(Ok(txn)));
-                    }
-                    if !(self.txn_size + Trible::SIZE <= src.len()) {
-                        break;
-                    }
-                    if src[self.txn_size..self.txn_size + Trible::TXN_ZEROS] == ZEROS {
-                        src.advance(self.txn_size);
-                        self.hash_state = Params::new().hash_length(32).to_state();
-                        self.txn_hash = None;
-                        self.txn_size = 0;
-                        return Ok(Some(Err("Unexpected transaction trible while reading transaction. Invalid hash.")));
-                    } else {
-                        self.hash_state
-                            .update(&src[self.txn_size..self.txn_size + Trible::SIZE]);
-                        self.txn_size += Trible::SIZE;
-                    }
+                Some(_) if at_txn_trible => {
+                    eprintln!("Decoder: Unexpected tranaction. Invalid hash.");
+                    src.advance(self.txn_size);
+                    self.hash_state = Params::new().hash_length(32).to_state();
+                    self.txn_hash = None;
+                    self.txn_size = 0;
+                    return Ok(Some(Err(
+                        "Unexpected transaction trible while reading transaction. Invalid hash.",
+                    )));
+                }
+                Some(_) if can_read => {
+                    eprintln!("Decoder: Updating hash.");
+                    self.hash_state
+                        .update(&src[self.txn_size..self.txn_size + Trible::SIZE]);
+                    self.txn_size += Trible::SIZE;
+                }
+                None if at_txn_trible && in_bad_txn => {
+                    eprintln!("Decoder: At txn start after bad txn.");
+                    src.advance(self.txn_size);
+                    return Ok(Some(Err(
+                        "Transaction doesn't begin with transaction trible.",
+                    )));
+                }
+                None if at_txn_trible => {
+                    eprintln!("Decoder: At txn start.");
+                    self.txn_hash = Some(
+                        (&src[self.txn_size + Trible::VALUE_START..self.txn_size + Trible::SIZE])
+                            .try_into()
+                            .unwrap(),
+                    );
+                    self.txn_size = Trible::SIZE;
+                }
+                None if can_read => {
+                    eprintln!("Decoder: Continue consuming invalid txn.");
+                    self.in_bad_txn = true;
+                    src.advance(Trible::SIZE);
+                }
+                //TODO do this in decode_eof and check how to keep the thing open...
+                None if at_end && in_bad_txn => {
+                    eprintln!("Decoder: Empty buffer, while consuming bad txn.");
+                    return Ok(Some(Err(
+                        "Transaction doesn't begin with transaction trible.",
+                    )));
+                }
+                _ => {
+                    eprintln!("Decoder: Default case.");
+                    src.reserve(Trible::SIZE);
+                    return Ok(None);
                 }
             }
         }
-        return Ok(None);
     }
 }

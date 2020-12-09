@@ -14,12 +14,4 @@ impl Trible {
     pub const SIZE: usize = Self::ENTITY_SIZE + Self::ATTRIBUTE_SIZE + Self::VALUE_SIZE;
 
     pub const TXN_ZEROS: usize = 16;
-
-    pub async fn read(&mut self, mut reader: impl AsyncRead + Unpin) -> Result<usize> {
-        reader.read_exact(&mut self.0).await
-    }
-
-    pub async fn write(&self, mut writer: impl AsyncWrite + Unpin) -> Result<()> {
-        writer.write_all(&self.0).await
-    }
 }
