@@ -77,7 +77,7 @@ async fn on_outgoing(
         tungstenite::Message,
     >,
     write_to: PathBuf,
-    mut latest_txn_rx: watch::Receiver<Option<[u8; 32]>>,
+    mut latest_txn_rx: watch::Receiver<[u8; 32]>,
 ) {
     eprintln!("Opening log for reading.");
     let read_log = OpenOptions::new()
@@ -88,32 +88,42 @@ async fn on_outgoing(
         .unwrap();
 
     let mut txn_stream = FramedRead::new(read_log, transaction::TransactionCodec::new());
+
+    while let Some(txn) = txn_stream.next().await {
+        match txn.unwrap() {
+            //TODO handle file errors.
+            Ok(txn) => {
+                eprintln!("Read transaction from log.");
+
+                outgoing
+                    .send(Message::Binary(txn.0.to_vec()))
+                    .await
+                    .unwrap();
+            }
+            Err(e) => {
+                eprintln!("Bad Transaction in log: {}", e);
+            }
+        }
+    }
     while let Ok(()) = latest_txn_rx.changed().await {
         eprintln!("New txn notification, writing to {}", addr);
-        let latest = { (*latest_txn_rx.borrow()).clone() };
-        match latest {
-            None => {}
-            Some(hash) => {
-                'log_loop: while let Some(txn) = txn_stream.next().await {
-                    match txn.unwrap() {
-                        //TODO handle file errors.
-                        Ok(txn) => {
-                            eprintln!("Read transaction from log.");
+        let hash = { (*latest_txn_rx.borrow()).clone() };
+        'log_loop: while let Some(txn) = txn_stream.next().await {
+            match txn.unwrap() {
+                //TODO handle file errors.
+                Ok(txn) => {
+                    eprintln!("Read transaction from log.");
 
-                            outgoing
-                                .send(Message::Binary(txn.0.to_vec()))
-                                .await
-                                .unwrap();
-                            if hash == txn.try_hash() {
-                                break 'log_loop;
-                            }
-                            continue;
-                        }
-                        Err(e) => {
-                            eprintln!("Bad Transaction in log: {}", e);
-                            continue;
-                        }
+                    outgoing
+                        .send(Message::Binary(txn.0.to_vec()))
+                        .await
+                        .unwrap();
+                    if hash == txn.try_hash() {
+                        break 'log_loop;
                     }
+                }
+                Err(e) => {
+                    eprintln!("Bad Transaction in log: {}", e);
                 }
             }
         }
@@ -127,7 +137,7 @@ async fn main() -> Result<()> {
         TribleCli::Archive { write_to, serve_on } => {
             let write_to_storage = write_to.clone();
             let (storage_tx, mut storage_rx) = mpsc::channel::<transaction::Transaction>(16);
-            let (latest_txn_tx, latest_txn_rx) = watch::channel::<Option<[u8; 32]>>(None);
+            let (latest_txn_tx, latest_txn_rx) = watch::channel::<[u8; 32]>([0; 32]);
             eprintln!("Opening log for writing.");
             let mut write_log = OpenOptions::new()
                 .create(true)
@@ -142,7 +152,7 @@ async fn main() -> Result<()> {
                     eprintln!("Writing txn to log.");
                     write_log.write_all(&txn.0[..]).await.unwrap();
                     write_log.flush().await.unwrap();
-                    latest_txn_tx.send(Some(txn.try_hash())).unwrap();
+                    latest_txn_tx.send(txn.try_hash()).unwrap();
                 }
             });
             // Create the event loop and TCP listener we'll accept connections on.
