@@ -32,3 +32,7 @@ predicates = "1.0.5"
 tempfile = "3"
 proptest = "0.10.1"
 # TODO: Add fuzzing https://rust-fuzz.github.io/book/cargo-fuzz/setup.html
+
+[patch.crates-io]
+tokio = { git = "https://github.com/somethingelseentirely/tokio", branch="framedread_test", package = "tokio", features = ["full"] }
+tokio-util = { git = "https://github.com/somethingelseentirely/tokio", branch="framedread_test", package = "tokio-util", features = ["full"] }
