@@ -1,12 +1,12 @@
 [package]
 name = "trible"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["⚫️ <jp@bultmann.eu>"]
 edition = "2018"
 description = "CLI for Tribles, a simple but versatile data and knowledge space."
 homepage = "https://tribles.space"
 repository = "https://github.com/triblesspace/trible"
-license = "MIT"
+license-file = "LICENSE"
 readme = "README.md"
 #TODO: Add more tags and proper categories.
 keywords = ["cli", "tribles"]
