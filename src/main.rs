@@ -1,24 +1,20 @@
 pub mod transaction;
 pub mod trible;
 
-use anyhow::{Context, Result};
-use bytes::Bytes;
-use futures::future;
-use futures::stream::{SplitSink, SplitStream, TryStreamExt};
+use anyhow::Result;
+use futures::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use structopt::StructOpt;
-use tokio::fs::File;
 use tokio::fs::OpenOptions;
-use tokio::io::AsyncRead;
-use tokio::io::{self, AsyncReadExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
-use tokio_tungstenite::{accept_async, client_async, WebSocketStream};
-use tokio_util::codec::{BytesCodec, FramedRead};
+use tokio_util::codec::FramedRead;
+use tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tungstenite::http::header::{HeaderValue, SEC_WEBSOCKET_PROTOCOL};
 use tungstenite::Message;
 
 #[derive(StructOpt)]
@@ -159,9 +155,19 @@ async fn main() -> Result<()> {
             let listener = TcpListener::bind(serve_on).await.unwrap();
             while let Ok((stream, addr)) = listener.accept().await {
                 eprintln!("Incoming TCP connection from: {}", addr);
-                let ws_stream = tokio_tungstenite::accept_async(stream)
-                    .await
-                    .expect("Error during the websocket handshake occurred");
+                let ws_stream = tokio_tungstenite::accept_hdr_async(
+                    stream,
+                    |_request: &Request,
+                     mut response: Response|
+                     -> Result<Response, ErrorResponse> {
+                        response
+                            .headers_mut()
+                            .append(SEC_WEBSOCKET_PROTOCOL, HeaderValue::from_static("tribles"));
+                        Ok(response)
+                    },
+                )
+                .await
+                .expect("Error during the websocket handshake occurred");
                 eprintln!("WebSocket connection established: {}", addr);
                 let (outgoing, incoming) = ws_stream.split();
 
@@ -175,7 +181,9 @@ async fn main() -> Result<()> {
             }
             //storage_task.await.unwrap()
         }
-        TribleCli::Notebook { connect_to } => panic!("NOT IMPLEMENTED"),
+        TribleCli::Notebook { connect_to: addr } => {
+            eprintln!("Can't connect to {} notebooks not implemented yet.", addr);
+        }
         TribleCli::Diagnose {} => panic!("NOT IMPLEMENTED"),
     }
     Ok(())

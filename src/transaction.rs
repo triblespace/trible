@@ -1,5 +1,5 @@
 use super::trible::Trible;
-use blake2s_simd::{blake2s, Hash, Params, State};
+use blake2s_simd::{Params, State};
 use bytes::Buf;
 use bytes::Bytes;
 use bytes::BytesMut;
