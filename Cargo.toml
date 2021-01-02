@@ -1,6 +1,6 @@
 [package]
 name = "trible"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["⚫️ <jp@bultmann.eu>"]
 edition = "2018"
 description = "CLI for Tribles, a simple but versatile data and knowledge space."
