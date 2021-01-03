@@ -35,8 +35,13 @@ enum TribleCli {
     /// Creates a TribleMQ node that serves as a broker between other nodes.
     /// Persists received Tribles to disk before passing them on.
     Archive {
+        /// immediately sync transactions to disk; less fast, more durable
+        #[structopt(short, long)]
+        sync: bool,
+        /// file to write archive to
         #[structopt(parse(from_os_str))]
         write_to: PathBuf,
+        /// address and port to listen on
         serve_on: SocketAddr,
     },
     /// Opens an observable notebook environment connected to the given Trible environment.
@@ -130,7 +135,11 @@ async fn on_outgoing(
 async fn main() -> Result<()> {
     let args = TribleCli::from_args();
     match args {
-        TribleCli::Archive { write_to, serve_on } => {
+        TribleCli::Archive {
+            sync,
+            write_to,
+            serve_on,
+        } => {
             let write_to_storage = write_to.clone();
             let (storage_tx, mut storage_rx) = mpsc::channel::<transaction::Transaction>(16);
             let (latest_txn_tx, latest_txn_rx) = watch::channel::<[u8; 32]>([0; 32]);
@@ -148,7 +157,9 @@ async fn main() -> Result<()> {
                     eprintln!("Writing txn to log.");
                     write_log.write_all(&txn.0[..]).await.unwrap();
                     write_log.flush().await.unwrap();
-                    write_log.sync_all().await.unwrap();
+                    if sync {
+                        write_log.sync_all().await.unwrap();
+                    }
                     latest_txn_tx.send(txn.try_hash()).unwrap();
                 }
             });
