@@ -148,6 +148,7 @@ async fn main() -> Result<()> {
                     eprintln!("Writing txn to log.");
                     write_log.write_all(&txn.0[..]).await.unwrap();
                     write_log.flush().await.unwrap();
+                    write_log.sync_all().await.unwrap();
                     latest_txn_tx.send(txn.try_hash()).unwrap();
                 }
             });
