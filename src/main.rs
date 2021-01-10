@@ -9,13 +9,13 @@ use std::path::PathBuf;
 use structopt::StructOpt;
 use tokio::fs::OpenOptions;
 use tokio::net::TcpListener;
-use tokio::prelude::*;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio_util::codec::FramedRead;
 use tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tungstenite::http::header::{HeaderValue, SEC_WEBSOCKET_PROTOCOL};
 use tungstenite::Message;
+use tokio::io::AsyncWriteExt;
 
 #[derive(StructOpt)]
 /// A simple but versatile data and knowledge space
