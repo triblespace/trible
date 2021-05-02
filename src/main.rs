@@ -29,7 +29,7 @@ use tokio::io::AsyncWriteExt;
 /// To run a notebook attached to a running archiver:
 ///   trible notebook "wss://localhost:8080"
 ///
-/// To run diagnostics, maintenange and repairs:
+/// To run diagnostics, maintenance and repairs:
 ///   trible diagnose "some_archive.tribles"
 enum TribleCli {
     /// Creates a TribleMQ node that serves as a broker between other nodes.
@@ -44,7 +44,7 @@ enum TribleCli {
         /// address and port to listen on
         serve_on: SocketAddr,
     },
-    /// Opens an observable notebook environment connected to the given Trible environment.
+    /// Opens a notebook connected to the given Trible archive.
     Notebook { connect_to: SocketAddr },
     /// Diagnostics providing analytics, maintenance, and repair tasks.
     Diagnose {},
