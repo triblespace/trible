@@ -6,7 +6,7 @@ edition = "2021"
 description = "A knowledge graph and higher order file system for object stores."
 homepage = "https://tribles.space"
 repository = "https://github.com/triblesspace/trible"
-license-file = "LICENSE"
+license = "MIT"
 readme = "README.md"
 #TODO: Add more tags and proper categories.
 keywords = ["cli", "tribles"]
