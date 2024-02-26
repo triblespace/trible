@@ -3,7 +3,7 @@ name = "trible"
 version = "0.2.0"
 authors = ["⚫️ <jp@bultmann.eu>"]
 edition = "2021"
-description = "CLI for Tribles, a simple but versatile data and knowledge space."
+description = "A knowledge graph and higher order file system for object stores."
 homepage = "https://tribles.space"
 repository = "https://github.com/triblesspace/trible"
 license-file = "LICENSE"
@@ -18,17 +18,15 @@ categories = ["command-line-utilities"]
 structopt = "0.3.26"
 anyhow = "1.0.63"
 futures-util = "0.3.24"
-tungstenite = "0.17.3"
-tokio-tungstenite = "0.17.2"
 tokio = { version = "1.21.0", features = ["full"] }
 tokio-util = { version = "0.7.3", features = ["full"] }
 bytes = "1.2.1"
 futures = "0.3.24"
-blake2s_simd = "1.0.0"
+rand = "0.8.5"
+hex = "0.4.3"
 
 [dev-dependencies]
 assert_cmd = "2.0.4"
 predicates = "2.1.1"
 tempfile = "3.3.0"
 proptest = "1.0.0"
-# TODO: Add fuzzing https://rust-fuzz.github.io/book/cargo-fuzz/setup.html
