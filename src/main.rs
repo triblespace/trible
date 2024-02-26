@@ -3,7 +3,7 @@ use structopt::StructOpt;
 use rand::{rngs::OsRng, RngCore};
 
 #[derive(StructOpt)]
-/// A knowledge graph and higher order file system for object stores.
+/// A knowledge graph and meta file system for object stores.
 ///
 enum TribleCli {
     /// Generate a new random id.
