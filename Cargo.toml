@@ -25,9 +25,6 @@ futures = "0.3.30"
 rand = "0.8.5"
 hex = "0.4.3"
 # chat
-candle-core = "0.4.1"
-candle-nn = "0.4.1"
-candle-transformers = "0.4.1"
 hf-hub = "0.3.2"
 tracing = "0.1.37"
 tracing-chrome = "0.7.1"
@@ -36,10 +33,13 @@ tokenizers = { version = "0.15.0", default-features = false, features = ["onig",
 clap = {version = "4.5.4", features = ["derive"]}
 serde = "1.0.197"
 serde_json = "1.0.115"
+candle-core = "0.4.1"
+candle-nn = "0.4.1"
+candle-transformers = "0.4.1"
+candle-metal-kernels = { version = "0.4.1", optional = true }
 accelerate-src = { version = "0.3.2", optional = true }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"], optional = true }
-candle-metal-kernels = { version = "0.4.1", optional = true }
-metal = { version = "0.27.0", features = ["mps"]}
+metal = { version = "0.27.0", features = ["mps"], optional = true}
 
 [dev-dependencies]
 
@@ -47,4 +47,4 @@ metal = { version = "0.27.0", features = ["mps"]}
 default = []
 accelerate = ["dep:accelerate-src", "candle-core/accelerate", "candle-nn/accelerate", "candle-transformers/accelerate"]
 mkl = ["dep:intel-mkl-src", "candle-core/mkl", "candle-nn/mkl", "candle-transformers/mkl"]
-metal = ["candle-core/metal", "candle-nn/metal"]
+metal = ["candle-core/metal", "candle-nn/metal", "candle-metal-kernels", "dep:metal"]

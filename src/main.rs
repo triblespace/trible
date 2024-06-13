@@ -1,9 +1,9 @@
 mod chat;
 
-use clap::{Parser, Subcommand};
 use anyhow::Result;
-use rand::{rngs::OsRng, RngCore};
 use chat::{chat, ChatArgs};
+use clap::{Parser, Subcommand};
+use rand::{rngs::OsRng, RngCore};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -17,7 +17,7 @@ struct TribleCli {
 #[derive(Subcommand)]
 enum Commands {
     /// Generate a new random id.
-    IdGen{},
+    IdGen {},
     /// Chat with your knowledge base.
     Chat(ChatArgs),
 }
@@ -26,7 +26,7 @@ enum Commands {
 async fn main() -> Result<()> {
     let args = TribleCli::parse();
     match args.command {
-        Commands::IdGen{} => {
+        Commands::IdGen {} => {
             let mut id = [0u8; 16];
             OsRng.fill_bytes(&mut id);
             let encoded_id = hex::encode(id);
@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
         }
         Commands::Chat(args) => {
             chat(args).unwrap();
-        },
+        }
     }
     Ok(())
 }
