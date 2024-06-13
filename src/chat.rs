@@ -124,8 +124,10 @@ pub fn chat(args: ChatArgs) -> anyhow::Result<()> {
     let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)?;
     let mut tos = TokenOutputStream::new(tokenizer);
 
-    let mut pre_prompt_tokens = vec![];
-    for prompt_index in 0.. {
+    let mut logits_processor = LogitsProcessor::new(args.seed, temperature, args.top_p);
+
+    let mut token_count = 0;
+    loop {
         let prompt_str = {
             print!("> ");
             std::io::stdout().flush()?;
@@ -136,29 +138,25 @@ pub fn chat(args: ChatArgs) -> anyhow::Result<()> {
             }
             format!("[INST] {prompt} [/INST]")
         };
-        let tokens = tos
+        let prompt_tokens = tos
             .tokenizer()
             .encode(prompt_str, true)
             .map_err(anyhow::Error::msg)?;
-        if args.verbose_prompt {
-            for (token, id) in tokens.get_tokens().iter().zip(tokens.get_ids().iter()) {
-                let token = token.replace('▁', " ").replace("<0x0A>", "\n");
-                println!("{id:7} -> '{token}'");
-            }
-        }
 
-        let context_tokens = [&pre_prompt_tokens, tokens.get_ids()].concat();
+        let prompt_tokens = prompt_tokens.get_ids();
+
         let mut gen_tokens = vec![];
-        let mut logits_processor = LogitsProcessor::new(args.seed, temperature, args.top_p);
 
         let start_prompt_processing = std::time::Instant::now();
-
-        let context_window_tokens =
-            &context_tokens[context_tokens.len().saturating_sub(model::MAX_SEQ_LEN)..];
-        let input = Tensor::new(context_window_tokens, &device)?.unsqueeze(0)?;
-        let logits = model.forward(&input, 0)?;
-        let logits = logits.squeeze(0)?;
-        let mut next_token = logits_processor.sample(&logits)?;
+       
+        let mut next_token = 0;
+        for token in prompt_tokens.iter() {
+            let input = Tensor::new(&[*token], &device)?.unsqueeze(0)?;
+            let logits = model.forward(&input, token_count)?;
+            let logits = logits.squeeze(0)?;
+            next_token = logits_processor.sample(&logits)?;
+            token_count += 1;
+        }
 
         let prompt_dt = start_prompt_processing.elapsed();
 
@@ -169,13 +167,15 @@ pub fn chat(args: ChatArgs) -> anyhow::Result<()> {
             std::io::stdout().flush()?;
         }
 
+        token_count += 1;
+
         let eos_token = "</s>";
         let eos_token = *tos.tokenizer().get_vocab(true).get(eos_token).unwrap();
         let start_post_prompt = std::time::Instant::now();
-        let mut sampled = 0;
-        for token_index in 0.. {
+
+        loop {
             let input = Tensor::new(&[next_token], &device)?.unsqueeze(0)?;
-            let logits = model.forward(&input, context_window_tokens.len() + token_index)?;
+            let logits = model.forward(&input, token_count)?;
             let logits = logits.squeeze(0)?;
             let logits = if args.repeat_penalty == 1. {
                 logits
@@ -193,11 +193,14 @@ pub fn chat(args: ChatArgs) -> anyhow::Result<()> {
                 print!("{t}");
                 std::io::stdout().flush()?;
             }
+
+            token_count += 1;
+
             if next_token == eos_token {
-                sampled = token_index + 1;
                 break;
             };
         }
+
         if let Some(rest) = tos.decode_rest().map_err(candle_core::Error::msg)? {
             print!("{rest}");
         }
@@ -205,15 +208,14 @@ pub fn chat(args: ChatArgs) -> anyhow::Result<()> {
         let dt = start_post_prompt.elapsed();
         println!(
             "\n\n{:4} prompt tokens processed: {:.2} token/s",
-            context_tokens.len(),
-            context_tokens.len() as f64 / prompt_dt.as_secs_f64(),
+            prompt_tokens.len(),
+            prompt_tokens.len() as f64 / prompt_dt.as_secs_f64(),
         );
         println!(
-            "{sampled:4} tokens generated: {:.2} token/s",
-            sampled as f64 / dt.as_secs_f64(),
+            "{:4} tokens generated: {:.2} token/s",
+            gen_tokens.len(),
+            gen_tokens.len() as f64 / dt.as_secs_f64(),
         );
-
-        pre_prompt_tokens = [context_tokens.as_slice(), gen_tokens.as_slice()].concat()
     }
 
     Ok(())
