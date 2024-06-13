@@ -91,7 +91,7 @@ pub fn chat(args: ChatArgs) -> anyhow::Result<()> {
     );
 
     let repo = "TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF";
-    let filename = "mixtral-8x7b-instruct-v0.1.Q4_K_M.gguf";
+    let filename = "mixtral-8x7b-instruct-v0.1.Q6_K.gguf";
     let api = hf_hub::api::sync::Api::new()?;
     let api = api.model(repo.to_string());
     let model_path = api.get(filename)?;
