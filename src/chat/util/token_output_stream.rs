@@ -1,15 +1,17 @@
 use candle_core::Result;
+use digest::{ Digest, typenum::U32 };
+use tribles::{types::Hash, BlobParseError, Bloblike, Bytes, Handle};
 
 /// This is a wrapper around a tokenizer to ensure that tokens can be returned to the user in a
 /// streaming way rather than having to wait for the full decoding.
-pub struct TokenOutputStream {
+pub struct TokenStream {
     tokenizer: tokenizers::Tokenizer,
     tokens: Vec<u32>,
     prev_index: usize,
     current_index: usize,
 }
 
-impl TokenOutputStream {
+impl TokenStream {
     pub fn new(tokenizer: tokenizers::Tokenizer) -> Self {
         Self {
             tokenizer,
@@ -82,5 +84,77 @@ impl TokenOutputStream {
         self.tokens.clear();
         self.prev_index = 0;
         self.current_index = 0;
+    }
+
+    pub fn archive(&mut self) -> TokenStreamArchive {
+        self.prev_index = 0;
+        self.current_index = 0;
+
+        let mut tokens = std::mem::take(&mut self.tokens);
+        tokens.iter_mut().for_each(|i| *i = i.to_be());
+
+        let bytes: Bytes = unsafe {
+            // Ensure the original vector is not dropped.
+            let mut tokens = std::mem::ManuallyDrop::new(tokens);
+            let tokens = Vec::from_raw_parts(tokens.as_mut_ptr() as *mut u8,
+                                            tokens.len(),
+                                                    tokens.capacity());
+            tokens.into()
+        };
+
+        TokenStreamArchive(bytes)
+    }
+}
+
+pub struct TokenStreamArchive(Bytes);
+
+pub struct TokenStreamArchiveIterator<'a> {
+    stream: &'a TokenStreamArchive,
+    index: usize,
+}
+
+impl<'a> Iterator for TokenStreamArchiveIterator<'a> {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index == self.stream.0.len() {
+            return None;
+        }
+        let token = u32::from_be_bytes(self.stream.0[self.index..self.index+4].try_into().unwrap());
+        self.index += 4;
+        Some(token)
+    }
+}
+
+impl<'a> IntoIterator for &'a TokenStreamArchive {
+    type Item = u32;
+
+    type IntoIter = TokenStreamArchiveIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        Self::IntoIter {
+            stream: &self,
+            index: 0
+        }
+    }
+}
+
+impl Bloblike for TokenStreamArchive {
+    fn into_blob(self) -> Bytes {
+        self.0
+    }
+
+    fn from_blob(blob: Bytes) -> std::result::Result<Self, tribles::BlobParseError> {
+        if (blob.len() % std::mem::size_of::<u32>()) != 0 {
+            return Err(BlobParseError::new("failed to load as u32 array"));
+        }
+        Ok(Self(blob))
+    }
+
+    fn as_handle<H>(&self) -> tribles::Handle<H, Self>
+    where
+        H: Digest<OutputSize = U32> {
+        let digest = H::digest(&self.0);
+        unsafe { Handle::new(Hash::new(digest.into())) }
     }
 }

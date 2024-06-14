@@ -15,12 +15,13 @@ categories = ["command-line-utilities"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+tribles = {git = "https://github.com/triblesspace/tribles-rust.git"}
+digest = "0.10.7"
 structopt = "0.3.26"
 anyhow = "1.0.80"
 futures-util = "0.3.30"
 tokio = { version = "1.36.0", features = ["full"] }
 tokio-util = { version = "0.7.10", features = ["full"] }
-bytes = "1.5.0"
 futures = "0.3.30"
 rand = "0.8.5"
 hex = "0.4.3"

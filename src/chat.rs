@@ -16,7 +16,7 @@ use candle_transformers::generation::LogitsProcessor;
 
 use candle_transformers::models::quantized_llama as model;
 use model::ModelWeights;
-use util::token_output_stream::TokenOutputStream;
+use util::token_output_stream::TokenStream;
 
 #[derive(Args, Debug)]
 pub struct ChatArgs {
@@ -122,7 +122,7 @@ pub fn chat(args: ChatArgs) -> anyhow::Result<()> {
     let api = api.model(repo.to_string());
     let tokenizer_path = api.get("tokenizer.json")?;
     let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)?;
-    let mut tos = TokenOutputStream::new(tokenizer);
+    let mut tos = TokenStream::new(tokenizer);
 
     let mut logits_processor = LogitsProcessor::new(args.seed, temperature, args.top_p);
 
