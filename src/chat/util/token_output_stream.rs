@@ -1,4 +1,4 @@
-use candle_core::Result;
+use candle_core::{Result, Tensor};
 use digest::{ Digest, typenum::U32 };
 use tribles::{types::Hash, BlobParseError, Bloblike, Bytes, Handle};
 
@@ -23,6 +23,23 @@ impl TokenStream {
 
     pub fn into_inner(self) -> tokenizers::Tokenizer {
         self.tokenizer
+    }
+
+    pub fn encode(&mut self, string: &str) -> anyhow::Result<()> {
+        let encodings = self.tokenizer()
+            .encode(string, true)
+            .map_err(anyhow::Error::msg)?;
+        self.tokens.extend_from_slice(encodings.get_ids());
+        Ok(())
+    }
+
+    pub fn apply_repeat_penalty(&self, context_len: usize, penalty: f32, logits: &Tensor) -> Result<Tensor> {
+        let start_at = self.tokens.len().saturating_sub(context_len);
+        candle_transformers::utils::apply_repeat_penalty(
+            &logits,
+            penalty,
+            &self.tokens[start_at..]
+        )
     }
 
     fn decode(&self, tokens: &[u32]) -> Result<String> {
@@ -107,6 +124,12 @@ impl TokenStream {
 }
 
 pub struct TokenStreamArchive(Bytes);
+
+impl TokenStreamArchive {
+    pub fn len(&self) -> usize {
+        self.0.len() >> 2
+    }
+}
 
 pub struct TokenStreamArchiveIterator<'a> {
     stream: &'a TokenStreamArchive,

@@ -122,6 +122,10 @@ pub fn chat(args: ChatArgs) -> anyhow::Result<()> {
     let api = api.model(repo.to_string());
     let tokenizer_path = api.get("tokenizer.json")?;
     let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(anyhow::Error::msg)?;
+
+    let eos_token = "</s>";
+    let eos_token = *tokenizer.get_vocab(true).get(eos_token).unwrap();
+
     let mut tos = TokenStream::new(tokenizer);
 
     let mut logits_processor = LogitsProcessor::new(args.seed, temperature, args.top_p);
@@ -138,20 +142,15 @@ pub fn chat(args: ChatArgs) -> anyhow::Result<()> {
             }
             format!("[INST] {prompt} [/INST]")
         };
-        let prompt_tokens = tos
-            .tokenizer()
-            .encode(prompt_str, true)
-            .map_err(anyhow::Error::msg)?;
+        tos.encode(&prompt_str)?;
 
-        let prompt_tokens = prompt_tokens.get_ids();
-
-        let mut gen_tokens = vec![];
+        let prompt_tokens = tos.archive();
 
         let start_prompt_processing = std::time::Instant::now();
        
         let mut next_token = 0;
-        for token in prompt_tokens.iter() {
-            let input = Tensor::new(&[*token], &device)?.unsqueeze(0)?;
+        for token in &prompt_tokens {
+            let input = Tensor::new(&[token], &device)?.unsqueeze(0)?;
             let logits = model.forward(&input, token_count)?;
             let logits = logits.squeeze(0)?;
             next_token = logits_processor.sample(&logits)?;
@@ -160,8 +159,6 @@ pub fn chat(args: ChatArgs) -> anyhow::Result<()> {
 
         let prompt_dt = start_prompt_processing.elapsed();
 
-        gen_tokens.push(next_token);
-
         if let Some(t) = tos.next_token(next_token)? {
             print!("{t}");
             std::io::stdout().flush()?;
@@ -169,8 +166,6 @@ pub fn chat(args: ChatArgs) -> anyhow::Result<()> {
 
         token_count += 1;
 
-        let eos_token = "</s>";
-        let eos_token = *tos.tokenizer().get_vocab(true).get(eos_token).unwrap();
         let start_post_prompt = std::time::Instant::now();
 
         loop {
@@ -180,15 +175,12 @@ pub fn chat(args: ChatArgs) -> anyhow::Result<()> {
             let logits = if args.repeat_penalty == 1. {
                 logits
             } else {
-                let start_at = gen_tokens.len().saturating_sub(args.repeat_last_n);
-                candle_transformers::utils::apply_repeat_penalty(
-                    &logits,
+                tos.apply_repeat_penalty(
+                    args.repeat_last_n,
                     args.repeat_penalty,
-                    &gen_tokens[start_at..],
-                )?
+                    &logits)?
             };
             next_token = logits_processor.sample(&logits)?;
-            gen_tokens.push(next_token);
             if let Some(t) = tos.next_token(next_token)? {
                 print!("{t}");
                 std::io::stdout().flush()?;
@@ -206,6 +198,9 @@ pub fn chat(args: ChatArgs) -> anyhow::Result<()> {
         }
         std::io::stdout().flush()?;
         let dt = start_post_prompt.elapsed();
+
+        let gen_tokens = tos.archive();
+
         println!(
             "\n\n{:4} prompt tokens processed: {:.2} token/s",
             prompt_tokens.len(),
