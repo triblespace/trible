@@ -114,8 +114,8 @@ impl TokenStream {
             // Ensure the original vector is not dropped.
             let mut tokens = std::mem::ManuallyDrop::new(tokens);
             let tokens = Vec::from_raw_parts(tokens.as_mut_ptr() as *mut u8,
-                                            tokens.len(),
-                                                    tokens.capacity());
+                                            tokens.len() * std::mem::size_of::<u32>(),
+                                                    tokens.capacity() * std::mem::size_of::<u32>());
             tokens.into()
         };
 
@@ -143,8 +143,8 @@ impl<'a> Iterator for TokenStreamArchiveIterator<'a> {
         if self.index == self.stream.0.len() {
             return None;
         }
-        let token = u32::from_be_bytes(self.stream.0[self.index..self.index+4].try_into().unwrap());
-        self.index += 4;
+        let token = u32::from_be_bytes(self.stream.0[self.index..self.index + std::mem::size_of::<u32>()].try_into().unwrap());
+        self.index +=  std::mem::size_of::<u32>();
         Some(token)
     }
 }
