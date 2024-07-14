@@ -41,6 +41,9 @@ candle-metal-kernels = { version = "0.5.1", optional = true }
 accelerate-src = { version = "0.3.2", optional = true }
 intel-mkl-src = { version = "0.8.1", features = ["mkl-static-lp64-iomp"], optional = true }
 metal = { version = "0.28.0", features = ["mps"], optional = true}
+zerocopy = { version = "0.7.34", features = ["derive"] }
+anybytes = "0.1.0"
+fast_qr = "0.12.5"
 
 [dev-dependencies]
 

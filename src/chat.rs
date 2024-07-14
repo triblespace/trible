@@ -1,4 +1,6 @@
 mod util;
+pub mod token_output_stream;
+pub mod ggufarchive;
 
 #[cfg(feature = "mkl")]
 extern crate intel_mkl_src;
@@ -17,12 +19,13 @@ use candle_transformers::generation::LogitsProcessor;
 
 use candle_transformers::models::quantized_llama as model;
 use model::ModelWeights;
-use util::token_output_stream::{ TokenStream, TokenStreamArchive };
+use token_output_stream::{ TokenStream, TokenStreamArchive };
+use ggufarchive::GGUFArchive;
 
 NS! {
     pub namespace convo {
         "852D052D37FE8695FCC4F9FD006EC5CC" as tokens: Handle<Blake3, TokenStreamArchive>;
-        "A5AF04BC5A055A17B9F77DFDD02847E7" as model: Handle<Blake3, WeightArchive>;
+        "A5AF04BC5A055A17B9F77DFDD02847E7" as model: Handle<Blake3, GGUFArchive>;
         "C9EEB7B0D65FEB77C0133924C7C4B8F3" as utterance_time: NsTAIInterval;
         "EA495295585C308ED6D02AFAFAE1BB64" as response_to: Id;
         "8BAC1866DBE9B97ABEF6DCBD3FD32163" as speaker: Id;

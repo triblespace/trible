@@ -2,8 +2,9 @@ mod chat;
 
 use anyhow::Result;
 use chat::{chat, ChatArgs};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use rand::{rngs::OsRng, RngCore};
+use fast_qr::qr::QRBuilder;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -14,10 +15,20 @@ struct TribleCli {
     command: Commands,
 }
 
+#[derive(Args, Debug)]
+pub struct IdArgs {
+    /// Generate a hex string of the ID.
+    #[arg(long)]
+    hex: bool,
+    /// Generate a QR code of the ID.
+    #[arg(long)]
+    qr: bool,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Generate a new random id.
-    IdGen {},
+    IdGen(IdArgs),
     /// Chat with your knowledge base.
     Chat(ChatArgs),
 }
@@ -26,11 +37,22 @@ enum Commands {
 async fn main() -> Result<()> {
     let args = TribleCli::parse();
     match args.command {
-        Commands::IdGen {} => {
+        Commands::IdGen(args) => {
             let mut id = [0u8; 16];
             OsRng.fill_bytes(&mut id);
-            let encoded_id = hex::encode(id);
-            println!("{}", encoded_id.to_ascii_uppercase());
+            let hex_encoded = hex::encode(id).to_ascii_uppercase();
+            if args.hex || !args.qr {
+                println!("{}", hex_encoded);
+            }
+            if args.qr {
+                QRBuilder::new(format!("RNDID:{}", hex_encoded.clone()))
+                    .version(fast_qr::Version::V02)
+                    .mode(fast_qr::Mode::Alphanumeric)
+                    .ecl(fast_qr::ECL::M)
+                    .build()
+                    .unwrap()
+                    .print();
+            }
         }
         Commands::Chat(args) => {
             chat(args).unwrap();
