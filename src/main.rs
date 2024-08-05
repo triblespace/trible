@@ -28,7 +28,7 @@ pub struct IdArgs {
 #[derive(Subcommand)]
 enum Commands {
     /// Generate a new random id.
-    IdGen(IdArgs),
+    Genid(IdArgs),
     /// Chat with your knowledge base.
     Chat(ChatArgs),
 }
@@ -37,7 +37,7 @@ enum Commands {
 async fn main() -> Result<()> {
     let args = TribleCli::parse();
     match args.command {
-        Commands::IdGen(args) => {
+        Commands::Genid(args) => {
             let mut id = [0u8; 16];
             OsRng.fill_bytes(&mut id);
             let hex_encoded = hex::encode(id).to_ascii_uppercase();
@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
                 println!("{}", hex_encoded);
             }
             if args.qr {
-                QRBuilder::new(format!("RNDID:{}", hex_encoded.clone()))
+                QRBuilder::new(format!("GENID:{}", hex_encoded.clone()))
                     .version(fast_qr::Version::V02)
                     .mode(fast_qr::Mode::Alphanumeric)
                     .ecl(fast_qr::ECL::M)
