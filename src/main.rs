@@ -1,8 +1,8 @@
 use anyhow::Result;
+use clap::Parser;
 use rand::{rngs::OsRng, RngCore};
-use structopt::StructOpt;
 
-#[derive(StructOpt)]
+#[derive(Parser)]
 /// A knowledge graph and meta file system for object stores.
 ///
 enum TribleCli {
@@ -10,9 +10,8 @@ enum TribleCli {
     IdGen {},
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let args = TribleCli::from_args();
+fn main() -> Result<()> {
+    let args = TribleCli::parse();
     match args {
         TribleCli::IdGen {} => {
             let mut id = [0u8; 16];

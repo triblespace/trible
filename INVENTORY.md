@@ -1,13 +1,7 @@
 # Inventory
 
 ## Potential Removals
-- `futures`, `futures-util`, `tokio-util`, and `bytes` dependencies are listed in `Cargo.toml`
-  but are unused by the current source code.
-- The code base uses `structopt` which is deprecated in favour of `clap`. Migrating
-  would simplify argument parsing and remove an outdated crate.
-- The asynchronous `tokio` runtime is only used for the `#[tokio::main]` macro. If
-  no asynchronous features are added back, this dependency could be dropped.
-
+- None at the moment.
 ## Desired Functionality
 - Reintroduce commands for managing trible archives (creation, reading, writing).
 - Networking capabilities to connect to remote archives/brokers.
