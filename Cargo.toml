@@ -24,5 +24,6 @@ bytes = "1.5.0"
 futures = "0.3.30"
 rand = "0.8.5"
 hex = "0.4.3"
+tribles = { git = "https://github.com/triblespace/tribles-rust" }
 
 [dev-dependencies]

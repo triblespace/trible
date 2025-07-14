@@ -1,6 +1,6 @@
 use anyhow::Result;
-use structopt::StructOpt;
 use rand::{rngs::OsRng, RngCore};
+use structopt::StructOpt;
 
 #[derive(StructOpt)]
 /// A knowledge graph and meta file system for object stores.
