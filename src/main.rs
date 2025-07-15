@@ -49,7 +49,7 @@ fn main() -> Result<()> {
                     println!("{id:X}");
                 }
             }
-        }
+        },
     }
     Ok(())
 }
