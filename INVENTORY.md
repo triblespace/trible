@@ -13,6 +13,7 @@
 - Diagnostics and repair tools similar to the old `diagnose` command.
 - Basic inspection utilities (listing entities, attributes, etc.).
 - Add support for inspecting remote object stores (S3, B2, etc.).
+- Add integration tests covering CLI commands like `idgen` and `pile list-branches`.
 - Expand crate metadata with additional tags and categories.
 
 ## Discovered Issues
