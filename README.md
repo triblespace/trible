@@ -1,7 +1,8 @@
 # Trible CLI
 
 A command line tool to interact with [Tribles](https://github.com/triblespace/tribles-rust).
-Currently the tool only provides a simple ID generator. It previously contained a
+Currently the tool provides a simple ID generator and a `pile list-branches` command
+for inspecting local pile files. It previously contained a
 number of experimental features (such as a broker/archiver and a notebook
 interface) which have been removed.
 
