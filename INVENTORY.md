@@ -2,11 +2,6 @@
 
 ## Potential Removals
 - None at the moment.
-## Completed Work
-- Initial `list-branches` command implemented to print branch identifiers.
-- Command moved under a `pile` subcommand for extensibility.
-- Added integration tests for `id-gen` and `pile list-branches` commands.
-
 ## Desired Functionality
 - Reintroduce commands for managing trible archives (creation, reading, writing).
 - Networking capabilities to connect to remote archives/brokers.
