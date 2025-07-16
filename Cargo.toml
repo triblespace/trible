@@ -22,3 +22,7 @@ hex = "0.4.3"
 tribles = { git = "https://github.com/triblespace/tribles-rust" }
 
 [dev-dependencies]
+assert_cmd = "2.0.17"
+predicates = "3.1.3"
+tempfile = "3.20.0"
+ed25519-dalek = "2.2.0"
