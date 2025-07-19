@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Changed
 - Expanded `AGENTS.md` with sections from the Tribles project and a dedicated
   inventory subsection.
+- Expanded crate metadata with additional keywords and categories.
+- Removed explanatory comment about crate metadata from `Cargo.toml`.
 ### Removed
 - Completed work entries have been trimmed from `INVENTORY.md` now that they are
   tracked here.

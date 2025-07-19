@@ -8,9 +8,18 @@ homepage = "https://tribles.space"
 repository = "https://github.com/triblesspace/trible"
 license = "MIT"
 readme = "README.md"
-#TODO: Add more tags and proper categories.
-keywords = ["cli", "tribles"]
-categories = ["command-line-utilities"]
+keywords = [
+    "cli",
+    "tribles",
+    "knowledge-graph",
+    "filesystem",
+    "object-store",
+]
+categories = [
+    "command-line-utilities",
+    "filesystem",
+    "database-implementations",
+]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
