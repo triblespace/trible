@@ -3,6 +3,7 @@ use ed25519_dalek::SigningKey;
 use predicates::prelude::*;
 use rand::rngs::OsRng;
 use tempfile::tempdir;
+use tribles::prelude::BranchStore;
 use tribles::repo::{pile::Pile, Repository};
 
 #[test]
@@ -34,4 +35,21 @@ fn list_branches_outputs_branch_id() {
         .assert()
         .success()
         .stdout(predicate::str::is_match("^[A-F0-9]{32}\n$").unwrap());
+}
+
+#[test]
+fn create_initializes_empty_pile() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("create_test.pile");
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["pile", "create", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    const MAX_SIZE: usize = 1 << 20; // small pile for tests
+    let pile: Pile<MAX_SIZE> = Pile::open(&path).unwrap();
+    assert!(pile.branches().next().is_none());
 }

@@ -24,6 +24,14 @@ enum PileCommand {
         /// Path to the pile file to inspect
         path: PathBuf,
     },
+    /// Create a new empty pile file.
+    ///
+    /// This is mainly a cross-platform convenience; a plain `touch` on
+    /// Unix-like systems achieves the same result.
+    Create {
+        /// Path to the pile file to create
+        path: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -48,6 +56,15 @@ fn main() -> Result<()> {
                     let id = branch?;
                     println!("{id:X}");
                 }
+            }
+            PileCommand::Create { path } => {
+                use tribles::repo::pile::Pile;
+                use tribles::value::schemas::hash::Blake3;
+
+                const MAX_PILE_SIZE: usize = 1 << 30; // 1 GiB
+                let mut pile: Pile<MAX_PILE_SIZE, Blake3> =
+                    Pile::open(&path).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             }
         },
     }

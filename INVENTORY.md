@@ -9,7 +9,8 @@
 - Diagnostics and repair tools similar to the old `diagnose` command.
 - Basic inspection utilities (listing entities, attributes, etc.).
 - Add support for inspecting remote object stores (S3, B2, etc.).
-- Expand crate metadata with additional tags and categories.
+- Add a `pile put` command that ingests a file into a pile, creating the pile
+  if it does not already exist.
 
 ## Discovered Issues
 - `OpenError` from the `Pile` API does not implement `std::error::Error`, which
