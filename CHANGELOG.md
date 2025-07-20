@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Added
 - Initial changelog with Let's Changelog format.
 - Integration tests for `id-gen` and `pile list-branches` commands.
+- `pile create` command to initialize new pile files.
+- Note that `touch` on Unix can also create an empty pile file.
 ### Changed
 - Expanded `AGENTS.md` with sections from the Tribles project and a dedicated
   inventory subsection.
@@ -16,3 +18,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Removed
 - Completed work entries have been trimmed from `INVENTORY.md` now that they are
   tracked here.
+- Removed completed inventory item for crate metadata expansion.
