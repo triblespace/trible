@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Removed explanatory comment about crate metadata from `Cargo.toml`.
 - Increased default maximum pile size to 16 TiB.
 - Fixed `pile put` compilation issues when using memmap.
+- Reworded inventory note about import/export commands to clarify blob
+  transfers to piles and object stores via dedicated subcommands.
 ### Removed
 - Completed work entries have been trimmed from `INVENTORY.md` now that they are
   tracked here.
