@@ -82,9 +82,9 @@ fn put_ingests_file() {
 }
 
 #[test]
-fn pull_restores_blob() {
+fn get_restores_blob() {
     let dir = tempdir().unwrap();
-    let pile_path = dir.path().join("pull_test.pile");
+    let pile_path = dir.path().join("get_test.pile");
     let input_path = dir.path().join("input.bin");
     let output_path = dir.path().join("output.bin");
     let contents = b"fetch me";
@@ -108,7 +108,7 @@ fn pull_restores_blob() {
         .unwrap()
         .args([
             "pile",
-            "pull",
+            "get",
             pile_path.to_str().unwrap(),
             &handle,
             output_path.to_str().unwrap(),

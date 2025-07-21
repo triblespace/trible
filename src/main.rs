@@ -45,7 +45,7 @@ enum PileCommand {
         file: PathBuf,
     },
     /// Extract a blob from a pile by its handle.
-    Pull {
+    Get {
         /// Path to the pile file to read
         pile: PathBuf,
         /// Handle of the blob to retrieve (e.g. "blake3:HEX...")
@@ -98,7 +98,7 @@ fn main() -> Result<()> {
                     .map_err(|e| anyhow::anyhow!("{e:?}"))?;
                 pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             }
-            PileCommand::Pull {
+            PileCommand::Get {
                 pile,
                 handle,
                 output,

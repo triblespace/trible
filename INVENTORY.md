@@ -3,7 +3,7 @@
 ## Potential Removals
 - None at the moment.
 ## Desired Functionality
-- Commands to put blobs into and pull blobs from piles and object stores using
+- Commands to put blobs into and get blobs from piles and object stores using
   their dedicated subcommands.
 - Diagnostics and repair tools similar to the old `diagnose` command.
 - Basic inspection utilities (listing entities, attributes, etc.).
