@@ -12,6 +12,3 @@
   available.
 
 ## Discovered Issues
-- `OpenError` from the `Pile` API does not implement `std::error::Error`, which
-  makes error handling with libraries like `anyhow` cumbersome. Consider adding
-  an `Error` implementation upstream.

@@ -69,8 +69,7 @@ fn main() -> Result<()> {
                 use tribles::repo::pile::Pile;
                 use tribles::value::schemas::hash::Blake3;
 
-                let pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> =
-                    Pile::open(&path).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                let pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&path)?;
 
                 for branch in pile.branches() {
                     let id = branch?;
@@ -81,8 +80,7 @@ fn main() -> Result<()> {
                 use tribles::repo::pile::Pile;
                 use tribles::value::schemas::hash::Blake3;
 
-                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> =
-                    Pile::open(&path).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&path)?;
                 pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             }
             PileCommand::Put { pile, file } => {
@@ -90,12 +88,10 @@ fn main() -> Result<()> {
                 use tribles::repo::pile::Pile;
                 use tribles::value::schemas::hash::Blake3;
 
-                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> =
-                    Pile::open(&pile).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
                 let file_handle = File::open(&file)?;
                 let mmap = unsafe { Mmap::map(&file_handle)? };
-                pile.put::<UnknownBlob, _>(Bytes::from_source(mmap))
-                    .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                pile.put::<UnknownBlob, _>(Bytes::from_source(mmap))?;
                 pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             }
             PileCommand::Get {
@@ -109,14 +105,13 @@ fn main() -> Result<()> {
                 use tribles::repo::pile::Pile;
                 use tribles::value::schemas::hash::{Blake3, Handle, Hash};
 
-                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> =
-                    Pile::open(&pile).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
                 let hash: tribles::value::Value<Hash<Blake3>> = handle
                     .try_to_value()
                     .map_err(|e| anyhow::anyhow!("{e:?}"))?;
                 let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash.into();
                 let reader = pile.reader();
-                let bytes: Bytes = reader.get(handle).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                let bytes: Bytes = reader.get(handle)?;
                 let mut file = File::create(&output)?;
                 file.write_all(&bytes)?;
             }
