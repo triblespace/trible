@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use blake3;
 use ed25519_dalek::SigningKey;
 use predicates::prelude::*;
 use rand::rngs::OsRng;
@@ -78,4 +79,44 @@ fn put_ingests_file() {
     let mut pile: Pile<MAX_SIZE> = Pile::open(&pile_path).unwrap();
     let reader = pile.reader();
     assert!(reader.blobs().next().is_some());
+}
+
+#[test]
+fn pull_restores_blob() {
+    let dir = tempdir().unwrap();
+    let pile_path = dir.path().join("pull_test.pile");
+    let input_path = dir.path().join("input.bin");
+    let output_path = dir.path().join("output.bin");
+    let contents = b"fetch me";
+    std::fs::write(&input_path, contents).unwrap();
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "put",
+            pile_path.to_str().unwrap(),
+            input_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let digest = blake3::hash(contents).to_hex().to_string();
+    let handle = format!("blake3:{digest}");
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "pull",
+            pile_path.to_str().unwrap(),
+            &handle,
+            output_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let out = std::fs::read(&output_path).unwrap();
+    assert_eq!(contents, &out[..]);
 }

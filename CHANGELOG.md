@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Note that `touch` on Unix can also create an empty pile file.
 - `pile put` command for ingesting a file into a pile.
 - `pile put` now memory maps the input for efficient ingestion.
+- `pile pull` command to extract blobs from a pile by handle.
 ### Changed
 - Expanded `AGENTS.md` with sections from the Tribles project and a dedicated
   inventory subsection.
@@ -25,3 +26,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Completed work entries have been trimmed from `INVENTORY.md` now that they are
   tracked here.
 - Removed completed inventory item for crate metadata expansion.
+- Removed note from README suggesting `touch` can create empty piles.
