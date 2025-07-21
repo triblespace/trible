@@ -4,6 +4,7 @@ use predicates::prelude::*;
 use rand::rngs::OsRng;
 use tempfile::tempdir;
 use tribles::prelude::BranchStore;
+use tribles::prelude::{BlobStore, BlobStoreList};
 use tribles::repo::{pile::Pile, Repository};
 
 #[test]
@@ -52,4 +53,29 @@ fn create_initializes_empty_pile() {
     const MAX_SIZE: usize = 1 << 20; // small pile for tests
     let pile: Pile<MAX_SIZE> = Pile::open(&path).unwrap();
     assert!(pile.branches().next().is_none());
+}
+
+#[test]
+fn put_ingests_file() {
+    let dir = tempdir().unwrap();
+    let pile_path = dir.path().join("put_test.pile");
+    let input_path = dir.path().join("input.bin");
+    std::fs::write(&input_path, b"hello world").unwrap();
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "put",
+            pile_path.to_str().unwrap(),
+            input_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    const MAX_SIZE: usize = 1 << 20; // small pile for tests
+    let mut pile: Pile<MAX_SIZE> = Pile::open(&pile_path).unwrap();
+    let reader = pile.reader();
+    assert!(reader.blobs().next().is_some());
 }
