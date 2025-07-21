@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use memmap2::Mmap;
 
 const DEFAULT_MAX_PILE_SIZE: usize = 1 << 44; // 16 TiB
-use tribles::prelude::{BlobStorePut, BranchStore};
+use tribles::prelude::{BlobStore, BlobStoreGet, BlobStorePut, BranchStore, TryToValue};
 
 #[derive(Parser)]
 /// A knowledge graph and meta file system for object stores.
@@ -43,6 +43,15 @@ enum PileCommand {
         pile: PathBuf,
         /// File whose contents should be stored in the pile
         file: PathBuf,
+    },
+    /// Extract a blob from a pile by its handle.
+    Get {
+        /// Path to the pile file to read
+        pile: PathBuf,
+        /// Handle of the blob to retrieve (e.g. "blake3:HEX...")
+        handle: String,
+        /// Destination file path for the extracted blob
+        output: PathBuf,
     },
 }
 
@@ -88,6 +97,28 @@ fn main() -> Result<()> {
                 pile.put::<UnknownBlob, _>(Bytes::from_source(mmap))
                     .map_err(|e| anyhow::anyhow!("{e:?}"))?;
                 pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            }
+            PileCommand::Get {
+                pile,
+                handle,
+                output,
+            } => {
+                use std::io::Write;
+
+                use tribles::blob::{schemas::UnknownBlob, Bytes};
+                use tribles::repo::pile::Pile;
+                use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+
+                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> =
+                    Pile::open(&pile).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                let hash: tribles::value::Value<Hash<Blake3>> = handle
+                    .try_to_value()
+                    .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash.into();
+                let reader = pile.reader();
+                let bytes: Bytes = reader.get(handle).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                let mut file = File::create(&output)?;
+                file.write_all(&bytes)?;
             }
         },
     }
