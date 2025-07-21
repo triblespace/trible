@@ -120,3 +120,61 @@ fn get_restores_blob() {
     let out = std::fs::read(&output_path).unwrap();
     assert_eq!(contents, &out[..]);
 }
+
+#[test]
+fn diagnose_reports_healthy() {
+    let dir = tempdir().unwrap();
+    let pile_path = dir.path().join("diag.pile");
+
+    // create an empty pile file
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["pile", "create", pile_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["pile", "diagnose", pile_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("healthy"));
+}
+
+#[test]
+fn diagnose_reports_invalid_hash() {
+    use std::io::{Seek, Write};
+
+    let dir = tempdir().unwrap();
+    let pile_path = dir.path().join("bad.pile");
+    let blob_path = dir.path().join("blob.bin");
+    std::fs::write(&blob_path, b"good data").unwrap();
+
+    // put a blob into the pile
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "put",
+            pile_path.to_str().unwrap(),
+            blob_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // corrupt the blob bytes directly
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&pile_path)
+        .unwrap();
+    // first blob starts after the 64 byte header
+    file.seek(std::io::SeekFrom::Start(64)).unwrap();
+    file.write_all(b"X").unwrap();
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["pile", "diagnose", pile_path.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("incorrect hashes"));
+}

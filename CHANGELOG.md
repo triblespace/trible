@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `pile put` command for ingesting a file into a pile.
 - `pile put` now memory maps the input for efficient ingestion.
 - `pile get` command to extract blobs from a pile by handle.
+- `pile diagnose` command to check pile integrity.
+- `pile diagnose` now verifies that all blob hashes match.
+- `pile diagnose` now exits with a nonzero code when corruption is detected.
+- Logged an inventory task to provide a structured command overview in the README.
 ### Changed
 - Expanded `AGENTS.md` with sections from the Tribles project and a dedicated
   inventory subsection.
@@ -28,3 +32,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   tracked here.
 - Removed completed inventory item for crate metadata expansion.
 - Removed note from README suggesting `touch` can create empty piles.
+- Removed inventory entry for the old `diagnose` command now that the feature is
+  implemented.
