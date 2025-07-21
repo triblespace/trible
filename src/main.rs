@@ -53,6 +53,11 @@ enum PileCommand {
         /// Destination file path for the extracted blob
         output: PathBuf,
     },
+    /// Run diagnostics and repair checks on a pile file.
+    Diagnose {
+        /// Path to the pile file to inspect
+        pile: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -114,6 +119,41 @@ fn main() -> Result<()> {
                 let bytes: Bytes = reader.get(handle)?;
                 let mut file = File::create(&output)?;
                 file.write_all(&bytes)?;
+            }
+            PileCommand::Diagnose { pile } => {
+                use tribles::repo::pile::{OpenError, Pile};
+                use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+
+                match Pile::<DEFAULT_MAX_PILE_SIZE, Blake3>::try_open(&pile) {
+                    Ok(mut pile) => {
+                        let reader = pile.reader();
+                        let mut invalid = 0usize;
+                        let mut total = 0usize;
+                        for (handle, blob) in reader.iter() {
+                            total += 1;
+                            let expected: tribles::value::Value<Hash<Blake3>> =
+                                Handle::to_hash(handle);
+                            let computed = Hash::<Blake3>::digest(&blob.bytes);
+                            if expected != computed {
+                                invalid += 1;
+                            }
+                        }
+
+                        if invalid == 0 {
+                            println!("Pile appears healthy");
+                        } else {
+                            println!(
+                                "Pile corrupt: {invalid} of {total} blobs have incorrect hashes"
+                            );
+                            anyhow::bail!("invalid blob hashes detected");
+                        }
+                    }
+                    Err(OpenError::CorruptPile { valid_length }) => {
+                        println!("Pile corrupt, valid portion: {valid_length} bytes");
+                        anyhow::bail!("pile corruption detected");
+                    }
+                    Err(err) => return Err(anyhow::anyhow!("{err:?}")),
+                }
             }
         },
     }
