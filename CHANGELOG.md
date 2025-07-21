@@ -10,11 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Integration tests for `id-gen` and `pile list-branches` commands.
 - `pile create` command to initialize new pile files.
 - Note that `touch` on Unix can also create an empty pile file.
+- `pile put` command for ingesting a file into a pile.
+- `pile put` now memory maps the input for efficient ingestion.
 ### Changed
 - Expanded `AGENTS.md` with sections from the Tribles project and a dedicated
   inventory subsection.
 - Expanded crate metadata with additional keywords and categories.
 - Removed explanatory comment about crate metadata from `Cargo.toml`.
+- Increased default maximum pile size to 16 TiB.
+- Fixed `pile put` compilation issues when using memmap.
 ### Removed
 - Completed work entries have been trimmed from `INVENTORY.md` now that they are
   tracked here.

@@ -1,8 +1,13 @@
 use anyhow::Result;
 use clap::Parser;
 use rand::{rngs::OsRng, RngCore};
+use std::fs::File;
 use std::path::PathBuf;
-use tribles::prelude::BranchStore;
+
+use memmap2::Mmap;
+
+const DEFAULT_MAX_PILE_SIZE: usize = 1 << 44; // 16 TiB
+use tribles::prelude::{BlobStorePut, BranchStore};
 
 #[derive(Parser)]
 /// A knowledge graph and meta file system for object stores.
@@ -32,6 +37,13 @@ enum PileCommand {
         /// Path to the pile file to create
         path: PathBuf,
     },
+    /// Ingest a file into a pile, creating the pile if necessary.
+    Put {
+        /// Path to the pile file to modify
+        pile: PathBuf,
+        /// File whose contents should be stored in the pile
+        file: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -48,8 +60,7 @@ fn main() -> Result<()> {
                 use tribles::repo::pile::Pile;
                 use tribles::value::schemas::hash::Blake3;
 
-                const MAX_PILE_SIZE: usize = 1 << 30; // 1 GiB
-                let pile: Pile<MAX_PILE_SIZE, Blake3> =
+                let pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> =
                     Pile::open(&path).map_err(|e| anyhow::anyhow!("{e:?}"))?;
 
                 for branch in pile.branches() {
@@ -61,9 +72,21 @@ fn main() -> Result<()> {
                 use tribles::repo::pile::Pile;
                 use tribles::value::schemas::hash::Blake3;
 
-                const MAX_PILE_SIZE: usize = 1 << 30; // 1 GiB
-                let mut pile: Pile<MAX_PILE_SIZE, Blake3> =
+                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> =
                     Pile::open(&path).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            }
+            PileCommand::Put { pile, file } => {
+                use tribles::blob::{schemas::UnknownBlob, Bytes};
+                use tribles::repo::pile::Pile;
+                use tribles::value::schemas::hash::Blake3;
+
+                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> =
+                    Pile::open(&pile).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                let file_handle = File::open(&file)?;
+                let mmap = unsafe { Mmap::map(&file_handle)? };
+                pile.put::<UnknownBlob, _>(Bytes::from_source(mmap))
+                    .map_err(|e| anyhow::anyhow!("{e:?}"))?;
                 pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             }
         },

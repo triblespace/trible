@@ -29,6 +29,7 @@ anyhow = "1.0.80"
 rand = "0.8.5"
 hex = "0.4.3"
 tribles = { git = "https://github.com/triblespace/tribles-rust" }
+memmap2 = "0.9"
 
 [dev-dependencies]
 assert_cmd = "2.0.17"
