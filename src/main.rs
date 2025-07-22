@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use memmap2::Mmap;
 
 const DEFAULT_MAX_PILE_SIZE: usize = 1 << 44; // 16 TiB
-use tribles::prelude::{BlobStore, BlobStoreGet, BlobStorePut, BranchStore, TryToValue};
+use tribles::prelude::{
+    BlobStore, BlobStoreGet, BlobStoreList, BlobStorePut, BranchStore, TryToValue,
+};
 
 #[derive(Parser)]
 /// A knowledge graph and meta file system for object stores.
@@ -26,6 +28,11 @@ enum TribleCli {
 enum PileCommand {
     /// List all branch identifiers in a pile file.
     ListBranches {
+        /// Path to the pile file to inspect
+        path: PathBuf,
+    },
+    /// List all blob handles stored in a pile file.
+    ListBlobs {
         /// Path to the pile file to inspect
         path: PathBuf,
     },
@@ -79,6 +86,20 @@ fn main() -> Result<()> {
                 for branch in pile.branches() {
                     let id = branch?;
                     println!("{id:X}");
+                }
+            }
+            PileCommand::ListBlobs { path } => {
+                use tribles::blob::schemas::UnknownBlob;
+                use tribles::repo::pile::Pile;
+                use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+
+                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&path)?;
+                let reader = pile.reader();
+                for handle in reader.blobs() {
+                    let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = handle?;
+                    let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
+                    let string: String = hash.from_value();
+                    println!("{}", string);
                 }
             }
             PileCommand::Create { path } => {

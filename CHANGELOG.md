@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `pile put` command for ingesting a file into a pile.
 - `pile put` now memory maps the input for efficient ingestion.
 - `pile get` command to extract blobs from a pile by handle.
+- `pile list-blobs` command to enumerate blob handles in a pile.
+- `pile list-blobs` output now uses built-in `Hash` formatting.
 - `pile diagnose` command to check pile integrity.
 - `pile diagnose` now verifies that all blob hashes match.
 - `pile diagnose` now exits with a nonzero code when corruption is detected.
@@ -29,6 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   transfers to piles and object stores via dedicated subcommands.
 - Simplified `Pile::open` error handling now that `OpenError` implements
   `std::error::Error` upstream.
+- `pile list-blobs` output uses lowercase hex instead of uppercase.
 ### Removed
 - Completed work entries have been trimmed from `INVENTORY.md` now that they are
   tracked here.
