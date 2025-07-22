@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `pile diagnose` now verifies that all blob hashes match.
 - `pile diagnose` now exits with a nonzero code when corruption is detected.
 - Logged an inventory task to provide a structured command overview in the README.
+- Structured command overview in the README.
 ### Changed
 - Expanded `AGENTS.md` with sections from the Tribles project and a dedicated
   inventory subsection.

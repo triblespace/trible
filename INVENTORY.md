@@ -10,6 +10,5 @@
 - Add support for inspecting remote object stores (S3, B2, etc.).
 - Incorporate new `anybytes` memory-mapping helpers once they become
   available.
-- Provide a structured command overview in the README.
 
 ## Discovered Issues
