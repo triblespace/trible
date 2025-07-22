@@ -122,6 +122,32 @@ fn get_restores_blob() {
 }
 
 #[test]
+fn list_blobs_outputs_handle() {
+    let dir = tempdir().unwrap();
+    let pile_path = dir.path().join("list_blobs.pile");
+    let input_path = dir.path().join("input.bin");
+    std::fs::write(&input_path, b"hello").unwrap();
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "put",
+            pile_path.to_str().unwrap(),
+            input_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["pile", "list-blobs", pile_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match("^blake3:[a-f0-9]{64}\n$").unwrap());
+}
+
+#[test]
 fn diagnose_reports_healthy() {
     let dir = tempdir().unwrap();
     let pile_path = dir.path().join("diag.pile");
