@@ -26,15 +26,15 @@ enum TribleCli {
 
 #[derive(Parser)]
 enum PileCommand {
-    /// List all branch identifiers in a pile file.
-    ListBranches {
-        /// Path to the pile file to inspect
-        path: PathBuf,
+    /// Operations on branches stored in a pile file.
+    Branch {
+        #[command(subcommand)]
+        cmd: BranchCommand,
     },
-    /// List all blob handles stored in a pile file.
-    ListBlobs {
-        /// Path to the pile file to inspect
-        path: PathBuf,
+    /// Operations on blobs stored in a pile file.
+    Blob {
+        #[command(subcommand)]
+        cmd: BlobCommand,
     },
     /// Create a new empty pile file.
     ///
@@ -42,6 +42,29 @@ enum PileCommand {
     /// Unix-like systems achieves the same result.
     Create {
         /// Path to the pile file to create
+        path: PathBuf,
+    },
+    /// Run diagnostics and repair checks on a pile file.
+    Diagnose {
+        /// Path to the pile file to inspect
+        pile: PathBuf,
+    },
+}
+
+#[derive(Parser)]
+enum BranchCommand {
+    /// List all branch identifiers in a pile file.
+    List {
+        /// Path to the pile file to inspect
+        path: PathBuf,
+    },
+}
+
+#[derive(Parser)]
+enum BlobCommand {
+    /// List all blob handles stored in a pile file.
+    List {
+        /// Path to the pile file to inspect
         path: PathBuf,
     },
     /// Ingest a file into a pile, creating the pile if necessary.
@@ -60,11 +83,6 @@ enum PileCommand {
         /// Destination file path for the extracted blob
         output: PathBuf,
     },
-    /// Run diagnostics and repair checks on a pile file.
-    Diagnose {
-        /// Path to the pile file to inspect
-        pile: PathBuf,
-    },
 }
 
 fn main() -> Result<()> {
@@ -77,69 +95,73 @@ fn main() -> Result<()> {
             println!("{}", encoded_id.to_ascii_uppercase());
         }
         TribleCli::Pile { cmd } => match cmd {
-            PileCommand::ListBranches { path } => {
-                use tribles::repo::pile::Pile;
-                use tribles::value::schemas::hash::Blake3;
+            PileCommand::Branch { cmd } => match cmd {
+                BranchCommand::List { path } => {
+                    use tribles::repo::pile::Pile;
+                    use tribles::value::schemas::hash::Blake3;
 
-                let pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&path)?;
+                    let pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&path)?;
 
-                for branch in pile.branches() {
-                    let id = branch?;
-                    println!("{id:X}");
+                    for branch in pile.branches() {
+                        let id = branch?;
+                        println!("{id:X}");
+                    }
                 }
-            }
-            PileCommand::ListBlobs { path } => {
-                use tribles::blob::schemas::UnknownBlob;
-                use tribles::repo::pile::Pile;
-                use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+            },
+            PileCommand::Blob { cmd } => match cmd {
+                BlobCommand::List { path } => {
+                    use tribles::blob::schemas::UnknownBlob;
+                    use tribles::repo::pile::Pile;
+                    use tribles::value::schemas::hash::{Blake3, Handle, Hash};
 
-                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&path)?;
-                let reader = pile.reader();
-                for handle in reader.blobs() {
-                    let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = handle?;
-                    let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
-                    let string: String = hash.from_value();
-                    println!("{}", string);
+                    let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&path)?;
+                    let reader = pile.reader();
+                    for handle in reader.blobs() {
+                        let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = handle?;
+                        let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
+                        let string: String = hash.from_value();
+                        println!("{}", string);
+                    }
                 }
-            }
+                BlobCommand::Put { pile, file } => {
+                    use tribles::blob::{schemas::UnknownBlob, Bytes};
+                    use tribles::repo::pile::Pile;
+                    use tribles::value::schemas::hash::Blake3;
+
+                    let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
+                    let file_handle = File::open(&file)?;
+                    let mmap = unsafe { Mmap::map(&file_handle)? };
+                    pile.put::<UnknownBlob, _>(Bytes::from_source(mmap))?;
+                    pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                }
+                BlobCommand::Get {
+                    pile,
+                    handle,
+                    output,
+                } => {
+                    use std::io::Write;
+
+                    use tribles::blob::{schemas::UnknownBlob, Bytes};
+                    use tribles::repo::pile::Pile;
+                    use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+
+                    let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
+                    let hash: tribles::value::Value<Hash<Blake3>> = handle
+                        .try_to_value()
+                        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                    let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash.into();
+                    let reader = pile.reader();
+                    let bytes: Bytes = reader.get(handle)?;
+                    let mut file = File::create(&output)?;
+                    file.write_all(&bytes)?;
+                }
+            },
             PileCommand::Create { path } => {
                 use tribles::repo::pile::Pile;
                 use tribles::value::schemas::hash::Blake3;
 
                 let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&path)?;
                 pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
-            }
-            PileCommand::Put { pile, file } => {
-                use tribles::blob::{schemas::UnknownBlob, Bytes};
-                use tribles::repo::pile::Pile;
-                use tribles::value::schemas::hash::Blake3;
-
-                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
-                let file_handle = File::open(&file)?;
-                let mmap = unsafe { Mmap::map(&file_handle)? };
-                pile.put::<UnknownBlob, _>(Bytes::from_source(mmap))?;
-                pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
-            }
-            PileCommand::Get {
-                pile,
-                handle,
-                output,
-            } => {
-                use std::io::Write;
-
-                use tribles::blob::{schemas::UnknownBlob, Bytes};
-                use tribles::repo::pile::Pile;
-                use tribles::value::schemas::hash::{Blake3, Handle, Hash};
-
-                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
-                let hash: tribles::value::Value<Hash<Blake3>> = handle
-                    .try_to_value()
-                    .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-                let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash.into();
-                let reader = pile.reader();
-                let bytes: Bytes = reader.get(handle)?;
-                let mut file = File::create(&output)?;
-                file.write_all(&bytes)?;
             }
             PileCommand::Diagnose { pile } => {
                 use tribles::repo::pile::{OpenError, Pile};

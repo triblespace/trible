@@ -32,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Simplified `Pile::open` error handling now that `OpenError` implements
   `std::error::Error` upstream.
 - `pile list-blobs` output uses lowercase hex instead of uppercase.
+- Pile commands reorganized under `branch` and `blob` subcommands.
 ### Removed
 - Completed work entries have been trimmed from `INVENTORY.md` now that they are
   tracked here.

@@ -33,7 +33,7 @@ fn list_branches_outputs_branch_id() {
 
     Command::cargo_bin("trible")
         .unwrap()
-        .args(["pile", "list-branches", path.to_str().unwrap()])
+        .args(["pile", "branch", "list", path.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::is_match("^[A-F0-9]{32}\n$").unwrap());
@@ -67,6 +67,7 @@ fn put_ingests_file() {
         .unwrap()
         .args([
             "pile",
+            "blob",
             "put",
             pile_path.to_str().unwrap(),
             input_path.to_str().unwrap(),
@@ -94,6 +95,7 @@ fn get_restores_blob() {
         .unwrap()
         .args([
             "pile",
+            "blob",
             "put",
             pile_path.to_str().unwrap(),
             input_path.to_str().unwrap(),
@@ -108,6 +110,7 @@ fn get_restores_blob() {
         .unwrap()
         .args([
             "pile",
+            "blob",
             "get",
             pile_path.to_str().unwrap(),
             &handle,
@@ -132,6 +135,7 @@ fn list_blobs_outputs_handle() {
         .unwrap()
         .args([
             "pile",
+            "blob",
             "put",
             pile_path.to_str().unwrap(),
             input_path.to_str().unwrap(),
@@ -141,7 +145,7 @@ fn list_blobs_outputs_handle() {
 
     Command::cargo_bin("trible")
         .unwrap()
-        .args(["pile", "list-blobs", pile_path.to_str().unwrap()])
+        .args(["pile", "blob", "list", pile_path.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::is_match("^blake3:[a-f0-9]{64}\n$").unwrap());
@@ -181,6 +185,7 @@ fn diagnose_reports_invalid_hash() {
         .unwrap()
         .args([
             "pile",
+            "blob",
             "put",
             pile_path.to_str().unwrap(),
             blob_path.to_str().unwrap(),
