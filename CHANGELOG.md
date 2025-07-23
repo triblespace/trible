@@ -46,3 +46,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Removed note from README suggesting `touch` can create empty piles.
 - Removed inventory entry for the old `diagnose` command now that the feature is
   implemented.
+- Removed inventory item for the `pile list-blobs` command now that the feature
+  exists.
