@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `pile put` command for ingesting a file into a pile.
 - `pile put` now memory maps the input for efficient ingestion.
 - `pile get` command to extract blobs from a pile by handle.
+- `pile blob inspect` command to show blob metadata like timestamp and size.
 - `pile list-blobs` command to enumerate blob handles in a pile.
 - `pile list-blobs` output now uses built-in `Hash` formatting.
 - `pile diagnose` command to check pile integrity.
