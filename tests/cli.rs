@@ -282,3 +282,68 @@ fn store_branch_list_outputs_id() {
         .success()
         .stdout(predicate::str::contains(branch_hex.to_ascii_uppercase()));
 }
+
+#[test]
+fn pile_branch_create_outputs_id() {
+    let dir = tempdir().unwrap();
+    let pile_path = dir.path().join("create_branch.pile");
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "branch",
+            "create",
+            pile_path.to_str().unwrap(),
+            "main",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match("^[A-F0-9]{32}\n$").unwrap());
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["pile", "branch", "list", pile_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match("^[A-F0-9]{32}\n$").unwrap());
+}
+
+#[test]
+fn branch_push_pull_transfers_branch() {
+    const MAX_SIZE: usize = 1 << 20;
+    let dir = tempdir().unwrap();
+    let local = dir.path().join("local.pile");
+    let remote_dir = dir.path().join("remote");
+    std::fs::create_dir_all(remote_dir.join("branches")).unwrap();
+    std::fs::create_dir_all(remote_dir.join("blobs")).unwrap();
+    let url = format!("file://{}", remote_dir.display());
+
+    let branch_id = {
+        let pile: Pile<MAX_SIZE> = Pile::open(&local).unwrap();
+        let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
+        let ws = repo.branch("main").unwrap();
+        ws.branch_id()
+    };
+    let branch_hex = hex::encode(branch_id);
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["branch", "push", &url, local.to_str().unwrap(), &branch_hex])
+        .assert()
+        .success();
+
+    let other = dir.path().join("other.pile");
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["branch", "pull", &url, other.to_str().unwrap(), &branch_hex])
+        .assert()
+        .success();
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["pile", "branch", "list", other.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(branch_hex.to_ascii_uppercase()));
+}

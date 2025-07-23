@@ -17,6 +17,11 @@ use tribles::prelude::{
 enum TribleCli {
     /// Generate a new random id.
     IdGen {},
+    /// Synchronize branches between piles and remote stores.
+    Branch {
+        #[command(subcommand)]
+        cmd: BranchCommand,
+    },
     /// Commands for working with local pile files.
     Pile {
         #[command(subcommand)]
@@ -34,7 +39,7 @@ enum PileCommand {
     /// Operations on branches stored in a pile file.
     Branch {
         #[command(subcommand)]
-        cmd: BranchCommand,
+        cmd: PileBranchCommand,
     },
     /// Operations on blobs stored in a pile file.
     Blob {
@@ -57,11 +62,40 @@ enum PileCommand {
 }
 
 #[derive(Parser)]
-enum BranchCommand {
+enum PileBranchCommand {
     /// List all branch identifiers in a pile file.
     List {
         /// Path to the pile file to inspect
         path: PathBuf,
+    },
+    /// Create a new branch in a pile file.
+    Create {
+        /// Path to the pile file to modify
+        pile: PathBuf,
+        /// Name of the branch to create
+        name: String,
+    },
+}
+
+#[derive(Parser)]
+enum BranchCommand {
+    /// Push a branch from a pile to a remote object store.
+    Push {
+        /// URL of the target object store
+        url: String,
+        /// Path to the source pile file
+        pile: PathBuf,
+        /// Branch identifier to push (hex encoded)
+        branch: String,
+    },
+    /// Pull a branch from a remote object store into a pile.
+    Pull {
+        /// URL of the source object store
+        url: String,
+        /// Path to the destination pile file
+        pile: PathBuf,
+        /// Branch identifier to pull (hex encoded)
+        branch: String,
     },
 }
 
@@ -138,9 +172,71 @@ fn main() -> Result<()> {
             let encoded_id = hex::encode(id);
             println!("{}", encoded_id.to_ascii_uppercase());
         }
+        TribleCli::Branch { cmd } => match cmd {
+            BranchCommand::Push { url, pile, branch } => {
+                use tribles::id::Id;
+                use tribles::repo;
+                use tribles::repo::objectstore::ObjectStoreRemote;
+                use tribles::repo::pile::Pile;
+                use tribles::value::schemas::hash::Blake3;
+                use url::Url;
+
+                let url = Url::parse(&url)?;
+                let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
+                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
+
+                let reader = pile.reader();
+                for r in repo::transfer::<_, _, Blake3, Blake3, tribles::blob::schemas::UnknownBlob>(
+                    &reader,
+                    &mut remote,
+                ) {
+                    r?;
+                }
+
+                let raw = hex::decode(branch)?;
+                let raw: [u8; 16] = raw.as_slice().try_into()?;
+                let id = Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?;
+
+                let handle = pile
+                    .head(id)?
+                    .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
+                let old = remote.head(id)?;
+                remote.update(id, old, handle)?;
+            }
+            BranchCommand::Pull { url, pile, branch } => {
+                use tribles::id::Id;
+                use tribles::repo;
+                use tribles::repo::objectstore::ObjectStoreRemote;
+                use tribles::repo::pile::Pile;
+                use tribles::value::schemas::hash::Blake3;
+                use url::Url;
+
+                let url = Url::parse(&url)?;
+                let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
+                let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
+
+                let reader = remote.reader();
+                for r in repo::transfer::<_, _, Blake3, Blake3, tribles::blob::schemas::UnknownBlob>(
+                    &reader, &mut pile,
+                ) {
+                    r?;
+                }
+
+                let raw = hex::decode(branch)?;
+                let raw: [u8; 16] = raw.as_slice().try_into()?;
+                let id = Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?;
+
+                let handle = remote
+                    .head(id)?
+                    .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
+                let old = pile.head(id)?;
+                pile.update(id, old, handle)?;
+                pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            }
+        },
         TribleCli::Pile { cmd } => match cmd {
             PileCommand::Branch { cmd } => match cmd {
-                BranchCommand::List { path } => {
+                PileBranchCommand::List { path } => {
                     use tribles::repo::pile::Pile;
                     use tribles::value::schemas::hash::Blake3;
 
@@ -150,6 +246,17 @@ fn main() -> Result<()> {
                         let id = branch?;
                         println!("{id:X}");
                     }
+                }
+                PileBranchCommand::Create { pile, name } => {
+                    use ed25519_dalek::SigningKey;
+                    use tribles::repo::pile::Pile;
+                    use tribles::repo::Repository;
+                    use tribles::value::schemas::hash::Blake3;
+
+                    let pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
+                    let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
+                    let ws = repo.branch(&name).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                    println!("{:#X}", ws.branch_id());
                 }
             },
             PileCommand::Blob { cmd } => match cmd {
