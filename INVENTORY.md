@@ -12,6 +12,5 @@
 - Add `store blob get` command to download objects from stores.
 - Add `store blob inspect` command to print metadata for a stored object.
 - Add `store blob forget` command to remove objects from a store.
-- Add `store branch push` and `store branch pull` commands for remote branches.
 
 ## Discovered Issues
