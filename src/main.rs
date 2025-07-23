@@ -83,6 +83,13 @@ enum BlobCommand {
         /// Destination file path for the extracted blob
         output: PathBuf,
     },
+    /// Inspect a blob and print basic metadata.
+    Inspect {
+        /// Path to the pile file to read
+        pile: PathBuf,
+        /// Handle of the blob to inspect (e.g. "blake3:HEX...")
+        handle: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -154,6 +161,41 @@ fn main() -> Result<()> {
                     let bytes: Bytes = reader.get(handle)?;
                     let mut file = File::create(&output)?;
                     file.write_all(&bytes)?;
+                }
+                BlobCommand::Inspect { pile, handle } => {
+                    use chrono::{DateTime, Utc};
+                    use file_type::FileType;
+                    use std::time::{Duration, UNIX_EPOCH};
+
+                    use tribles::blob::{schemas::UnknownBlob, Blob};
+                    use tribles::repo::pile::{BlobMetadata, Pile};
+                    use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+
+                    let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
+                    let hash_val: tribles::value::Value<Hash<Blake3>> = handle
+                        .try_to_value()
+                        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                    let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
+                        hash_val.into();
+                    let reader = pile.reader();
+                    let blob: Blob<UnknownBlob> = reader.get(handle_val)?;
+                    let metadata: BlobMetadata = reader
+                        .metadata(handle_val)
+                        .ok_or_else(|| anyhow::anyhow!("blob not found"))?;
+
+                    let dt = UNIX_EPOCH + Duration::from_millis(metadata.timestamp);
+                    let time: DateTime<Utc> = DateTime::<Utc>::from(dt);
+
+                    let ftype = FileType::from_bytes(&blob.bytes);
+                    let name = ftype.name();
+
+                    let handle_str: String = hash_val.from_value();
+                    println!(
+                        "Hash: {handle_str}\nTime: {}\nLength: {} bytes\nType: {}",
+                        time.to_rfc3339(),
+                        metadata.length,
+                        name
+                    );
                 }
             },
             PileCommand::Create { path } => {

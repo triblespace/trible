@@ -209,3 +209,40 @@ fn diagnose_reports_invalid_hash() {
         .failure()
         .stdout(predicate::str::contains("incorrect hashes"));
 }
+
+#[test]
+fn inspect_outputs_tribles() {
+    use tribles::examples;
+    use tribles::prelude::blobschemas::SimpleArchive;
+    use tribles::prelude::*;
+    use tribles::value::schemas::hash::Handle;
+
+    const MAX_SIZE: usize = 1 << 20;
+    let dir = tempdir().unwrap();
+    let pile_path = dir.path().join("inspect.pile");
+
+    let dataset = examples::dataset();
+    let blob = dataset.to_blob();
+
+    {
+        let mut pile: Pile<MAX_SIZE> = Pile::open(&pile_path).unwrap();
+        let handle = pile.put::<SimpleArchive, _>(blob).unwrap();
+        pile.flush().unwrap();
+
+        let hash = Handle::to_hash(handle);
+        let handle_str: String = hash.from_value();
+
+        Command::cargo_bin("trible")
+            .unwrap()
+            .args([
+                "pile",
+                "blob",
+                "inspect",
+                pile_path.to_str().unwrap(),
+                &handle_str,
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Length:"));
+    }
+}
