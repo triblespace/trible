@@ -22,6 +22,11 @@ enum TribleCli {
         #[command(subcommand)]
         cmd: PileCommand,
     },
+    /// Inspect remote object stores.
+    Store {
+        #[command(subcommand)]
+        cmd: StoreCommand,
+    },
 }
 
 #[derive(Parser)]
@@ -89,6 +94,38 @@ enum BlobCommand {
         pile: PathBuf,
         /// Handle of the blob to inspect (e.g. "blake3:HEX...")
         handle: String,
+    },
+}
+
+#[derive(Parser)]
+enum StoreCommand {
+    /// Operations on branches stored in a remote object store.
+    Branch {
+        #[command(subcommand)]
+        cmd: StoreBranchCommand,
+    },
+    /// Operations on blobs stored in a remote object store.
+    Blob {
+        #[command(subcommand)]
+        cmd: StoreBlobCommand,
+    },
+}
+
+#[derive(Parser)]
+enum StoreBranchCommand {
+    /// List all branch identifiers at the given URL.
+    List {
+        /// URL of the object store to inspect (e.g. "s3://bucket/path" or "file:///path")
+        url: String,
+    },
+}
+
+#[derive(Parser)]
+enum StoreBlobCommand {
+    /// List objects at the given URL.
+    List {
+        /// URL of the object store to inspect (e.g. "s3://bucket/path" or "file:///path")
+        url: String,
     },
 }
 
@@ -240,6 +277,42 @@ fn main() -> Result<()> {
                     Err(err) => return Err(anyhow::anyhow!("{err:?}")),
                 }
             }
+        },
+        TribleCli::Store { cmd } => match cmd {
+            StoreCommand::Blob { cmd } => match cmd {
+                StoreBlobCommand::List { url } => {
+                    use futures::StreamExt;
+                    use object_store::{parse_url, ObjectStore};
+                    use url::Url;
+
+                    let url = Url::parse(&url)?;
+                    let (store, path) = parse_url(&url)?;
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()?;
+                    rt.block_on(async move {
+                        let mut stream = store.list(Some(&path));
+                        while let Some(meta) = stream.next().await.transpose()? {
+                            println!("{}", meta.location);
+                        }
+                        Ok::<(), anyhow::Error>(())
+                    })?;
+                }
+            },
+            StoreCommand::Branch { cmd } => match cmd {
+                StoreBranchCommand::List { url } => {
+                    use tribles::repo::objectstore::ObjectStoreRemote;
+                    use tribles::value::schemas::hash::Blake3;
+                    use url::Url;
+
+                    let url = Url::parse(&url)?;
+                    let remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
+                    for branch in remote.branches() {
+                        let id = branch?;
+                        println!("{id:X}");
+                    }
+                }
+            },
         },
     }
     Ok(())

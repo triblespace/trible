@@ -19,8 +19,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `pile diagnose` command to check pile integrity.
 - `pile diagnose` now verifies that all blob hashes match.
 - `pile diagnose` now exits with a nonzero code when corruption is detected.
+- `store blob list` command to enumerate object store contents.
+- `store branch list` command to list branches in an object store.
 - Logged an inventory task to provide a structured command overview in the README.
 - Structured command overview in the README.
+- Renamed the future `store delete` command to `store forget` in the inventory.
 ### Changed
 - Expanded `AGENTS.md` with sections from the Tribles project and a dedicated
   inventory subsection.
@@ -35,6 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   `std::error::Error` upstream.
 - `pile list-blobs` output uses lowercase hex instead of uppercase.
 - Pile commands reorganized under `branch` and `blob` subcommands.
+- Store commands reorganized under `branch` and `blob` subcommands.
 ### Removed
 - Completed work entries have been trimmed from `INVENTORY.md` now that they are
   tracked here.

@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use blake3;
 use ed25519_dalek::SigningKey;
+use hex;
 use predicates::prelude::*;
 use rand::rngs::OsRng;
 use tempfile::tempdir;
@@ -245,4 +246,39 @@ fn inspect_outputs_tribles() {
             .success()
             .stdout(predicate::str::contains("Length:"));
     }
+}
+
+#[test]
+fn store_blob_list_outputs_file() {
+    let dir = tempdir().unwrap();
+    let file = dir.path().join("file.bin");
+    std::fs::write(&file, b"hi").unwrap();
+
+    let url = format!("file://{}", dir.path().display());
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["store", "blob", "list", &url])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("file.bin"));
+}
+
+#[test]
+fn store_branch_list_outputs_id() {
+    let dir = tempdir().unwrap();
+    let branch_id = [1u8; 16];
+    let branch_hex = hex::encode(branch_id);
+    let branches_dir = dir.path().join("branches");
+    std::fs::create_dir_all(&branches_dir).unwrap();
+    std::fs::write(branches_dir.join(&branch_hex), b"branch").unwrap();
+
+    let url = format!("file://{}", dir.path().display());
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["store", "branch", "list", &url])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(branch_hex.to_ascii_uppercase()));
 }
