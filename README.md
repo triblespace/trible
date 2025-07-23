@@ -12,6 +12,8 @@ A command line tool to interact with [Tribles](https://github.com/triblespace/tr
 - `pile blob get <PILE> <HANDLE> <OUTPUT>` – extract a blob by handle.
 - `pile blob inspect <PILE> <HANDLE>` – display metadata for a stored blob.
 - `pile diagnose <PILE>` – verify pile integrity.
+- `store blob list <URL>` – list objects at a remote store URL.
+- `store branch list <URL>` – list branches at a remote store URL.
 
 The project now depends on the unreleased `tribles` crate directly from Git.
 
