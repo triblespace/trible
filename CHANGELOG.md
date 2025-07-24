@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `pile diagnose` now verifies that all blob hashes match.
 - `pile diagnose` now exits with a nonzero code when corruption is detected.
 - `store blob list` command to enumerate object store contents.
+- `store blob put` command to upload files to object stores.
 - `store branch list` command to list branches in an object store.
 - `pile branch create` command to create a new branch.
 - `branch push` and `branch pull` commands to sync branches with remote stores.
@@ -42,6 +43,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `pile list-blobs` output uses lowercase hex instead of uppercase.
 - Pile commands reorganized under `branch` and `blob` subcommands.
 - Store commands reorganized under `branch` and `blob` subcommands.
+- Simplified file ingestion using `anybytes::Bytes::map_file` and removed
+  the `memmap2` dependency.
 ### Removed
 - Completed work entries have been trimmed from `INVENTORY.md` now that they are
   tracked here.
@@ -51,3 +54,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   implemented.
 - Removed inventory item for the `pile list-blobs` command now that the feature
   exists.
+- Removed inventory note about `anybytes` helper integration.
