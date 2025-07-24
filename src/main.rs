@@ -4,8 +4,6 @@ use rand::{rngs::OsRng, RngCore};
 use std::fs::File;
 use std::path::PathBuf;
 
-use memmap2::Mmap;
-
 const DEFAULT_MAX_PILE_SIZE: usize = 1 << 44; // 16 TiB
 use tribles::prelude::{
     BlobStore, BlobStoreGet, BlobStoreList, BlobStorePut, BranchStore, TryToValue,
@@ -161,6 +159,13 @@ enum StoreBlobCommand {
         /// URL of the object store to inspect (e.g. "s3://bucket/path" or "file:///path")
         url: String,
     },
+    /// Upload a file to a remote object store.
+    Put {
+        /// URL of the destination object store (e.g. "s3://bucket/path" or "file:///path")
+        url: String,
+        /// File whose contents should be stored remotely
+        file: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -281,8 +286,8 @@ fn main() -> Result<()> {
 
                     let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
                     let file_handle = File::open(&file)?;
-                    let mmap = unsafe { Mmap::map(&file_handle)? };
-                    pile.put::<UnknownBlob, _>(Bytes::from_source(mmap))?;
+                    let bytes = unsafe { Bytes::map_file(&file_handle)? };
+                    pile.put::<UnknownBlob, _>(bytes)?;
                     pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
                 }
                 BlobCommand::Get {
@@ -404,6 +409,18 @@ fn main() -> Result<()> {
                         }
                         Ok::<(), anyhow::Error>(())
                     })?;
+                }
+                StoreBlobCommand::Put { url, file } => {
+                    use tribles::blob::{schemas::UnknownBlob, Bytes};
+                    use tribles::repo::objectstore::ObjectStoreRemote;
+                    use tribles::value::schemas::hash::Blake3;
+                    use url::Url;
+
+                    let url = Url::parse(&url)?;
+                    let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
+                    let file_handle = File::open(&file)?;
+                    let bytes = unsafe { Bytes::map_file(&file_handle)? };
+                    remote.put::<UnknownBlob, _>(bytes)?;
                 }
             },
             StoreCommand::Branch { cmd } => match cmd {

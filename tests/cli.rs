@@ -265,6 +265,27 @@ fn store_blob_list_outputs_file() {
 }
 
 #[test]
+fn store_blob_put_uploads_file() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("input.bin");
+    let contents = b"hi there";
+    std::fs::write(&file_path, contents).unwrap();
+
+    let url = format!("file://{}", dir.path().display());
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["store", "blob", "put", &url, file_path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let digest = blake3::hash(contents).to_hex().to_string();
+    let blob_path = dir.path().join("blobs").join(digest);
+    assert!(blob_path.exists());
+}
+
+#[test]
 fn store_branch_list_outputs_id() {
     let dir = tempdir().unwrap();
     let branch_id = [1u8; 16];
