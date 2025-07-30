@@ -15,6 +15,7 @@ A command line tool to interact with [Tribles](https://github.com/triblespace/tr
 - `pile diagnose <PILE>` – verify pile integrity.
 - `store blob list <URL>` – list objects at a remote store URL.
 - `store blob put <URL> <FILE>` – upload a file to a remote store.
+- `store blob get <URL> <HANDLE> <OUTPUT>` – download a blob from a remote store.
 - `store branch list <URL>` – list branches at a remote store URL.
 - `branch push <URL> <PILE> <ID>` – push a branch to a remote store.
 - `branch pull <URL> <PILE> <ID>` – pull a branch from a remote store.
