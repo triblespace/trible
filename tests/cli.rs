@@ -286,6 +286,32 @@ fn store_blob_put_uploads_file() {
 }
 
 #[test]
+fn store_blob_inspect_outputs_metadata() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("inspect.bin");
+    let contents = b"remote";
+    std::fs::write(&file_path, contents).unwrap();
+
+    let url = format!("file://{}", dir.path().display());
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["store", "blob", "put", &url, file_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let digest = blake3::hash(contents).to_hex().to_string();
+    let handle = format!("blake3:{digest}");
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["store", "blob", "inspect", &url, &handle])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Length:"));
+}
+
+#[test]
 fn store_branch_list_outputs_id() {
     let dir = tempdir().unwrap();
     let branch_id = [1u8; 16];

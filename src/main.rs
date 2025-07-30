@@ -166,6 +166,13 @@ enum StoreBlobCommand {
         /// File whose contents should be stored remotely
         file: PathBuf,
     },
+    /// Inspect a blob stored in a remote object store.
+    Inspect {
+        /// URL of the object store (e.g. "s3://bucket/path" or "file:///path")
+        url: String,
+        /// Handle of the blob to inspect (e.g. "blake3:HEX...")
+        handle: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -421,6 +428,46 @@ fn main() -> Result<()> {
                     let file_handle = File::open(&file)?;
                     let bytes = unsafe { Bytes::map_file(&file_handle)? };
                     remote.put::<UnknownBlob, _>(bytes)?;
+                }
+                StoreBlobCommand::Inspect { url, handle } => {
+                    use file_type::FileType;
+                    use futures::executor::block_on;
+                    use object_store::{parse_url, ObjectStore};
+                    use tribles::blob::{schemas::UnknownBlob, Blob};
+                    use tribles::repo::objectstore::ObjectStoreRemote;
+                    use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+                    use url::Url;
+
+                    let url = Url::parse(&url)?;
+                    let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
+                    let hash_val: tribles::value::Value<Hash<Blake3>> = handle
+                        .try_to_value()
+                        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                    let handle_str: String = hash_val.clone().from_value();
+                    let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
+                        hash_val.into();
+                    let reader = remote.reader();
+                    let blob: Blob<UnknownBlob> = reader.get(handle_val)?;
+
+                    let (store, base) = parse_url(&url)?;
+                    let handle_hex = handle_str
+                        .split(':')
+                        .last()
+                        .ok_or_else(|| anyhow::anyhow!("invalid handle"))?;
+                    let path = base.child("blobs").child(handle_hex);
+                    let meta = block_on(async { store.head(&path).await })?;
+                    let time = meta.last_modified;
+                    let length = meta.size;
+
+                    let ftype = FileType::from_bytes(&blob.bytes);
+                    let name = ftype.name();
+
+                    println!(
+                        "Hash: {handle_str}\nTime: {}\nLength: {} bytes\nType: {}",
+                        time.to_rfc3339(),
+                        length,
+                        name
+                    );
                 }
             },
             StoreCommand::Branch { cmd } => match cmd {
