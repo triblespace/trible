@@ -166,6 +166,13 @@ enum StoreBlobCommand {
         /// File whose contents should be stored remotely
         file: PathBuf,
     },
+    /// Remove an object from a remote store.
+    Forget {
+        /// URL of the object store containing the blob (e.g. "s3://bucket/path" or "file:///path")
+        url: String,
+        /// Handle of the blob to remove (e.g. "blake3:HEX...")
+        handle: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -421,6 +428,26 @@ fn main() -> Result<()> {
                     let file_handle = File::open(&file)?;
                     let bytes = unsafe { Bytes::map_file(&file_handle)? };
                     remote.put::<UnknownBlob, _>(bytes)?;
+                }
+                StoreBlobCommand::Forget { url, handle } => {
+                    use object_store::{parse_url, ObjectStore};
+                    use tribles::blob::schemas::UnknownBlob;
+                    use tribles::prelude::TryToValue;
+                    use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+                    use url::Url;
+
+                    let url = Url::parse(&url)?;
+                    let (store, path) = parse_url(&url)?;
+                    let hash_val: tribles::value::Value<Hash<Blake3>> = handle
+                        .try_to_value()
+                        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                    let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
+                        hash_val.into();
+                    let blob_path = path.child("blobs").child(hex::encode(handle_val.raw));
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()?;
+                    rt.block_on(async move { store.delete(&blob_path).await })?;
                 }
             },
             StoreCommand::Branch { cmd } => match cmd {

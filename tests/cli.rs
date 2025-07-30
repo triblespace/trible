@@ -286,6 +286,38 @@ fn store_blob_put_uploads_file() {
 }
 
 #[test]
+fn store_blob_forget_removes_blob() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("input.bin");
+    let contents = b"remove me";
+    std::fs::write(&file_path, contents).unwrap();
+
+    let url = format!("file://{}", dir.path().display());
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["store", "blob", "put", &url, file_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let digest = blake3::hash(contents).to_hex().to_string();
+    let handle = format!("blake3:{digest}");
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["store", "blob", "forget", &url, &handle])
+        .assert()
+        .success();
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["store", "blob", "list", &url])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&digest).not());
+}
+
+#[test]
 fn store_branch_list_outputs_id() {
     let dir = tempdir().unwrap();
     let branch_id = [1u8; 16];
