@@ -25,3 +25,9 @@ A command line tool to interact with [Tribles](https://github.com/triblespace/tr
 The project now depends on the unreleased `tribles` crate directly from Git.
 
 See `INVENTORY.md` for notes on possible cleanup and future functionality.
+
+## Development
+
+Command implementations are organized under `src/cli/` with separate modules
+for `branch`, `pile`, and `store`. The modules expose their subcommands and are
+re-exported from `main.rs` to preserve the existing CLI interface.

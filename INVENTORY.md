@@ -11,3 +11,4 @@
 - Add `store blob forget` command to remove objects from a store.
 
 ## Discovered Issues
+- Shared code across CLI modules could be deduplicated into utilities.
