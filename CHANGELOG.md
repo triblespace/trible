@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `store blob list` command to enumerate object store contents.
 - `store blob put` command to upload files to object stores.
 - `store blob inspect` command to display metadata for remote blobs.
+- `store blob get` command to download blobs from object stores.
 - `store branch list` command to list branches in an object store.
 - `pile branch create` command to create a new branch.
 - `branch push` and `branch pull` commands to sync branches with remote stores.
