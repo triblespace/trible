@@ -30,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Tests for branch creation and branch push/pull using a file object store.
 - Logged an inventory task to provide a structured command overview in the README.
 - Structured command overview in the README.
+- Logged inventory tasks for inspection utilities, shell completions, progress reporting, and migrating to the published `tribles` crate.
 - Renamed the future `store delete` command to `store forget` in the inventory.
 ### Changed
 - Expanded `AGENTS.md` with sections from the Tribles project and a dedicated
@@ -59,4 +60,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   exists.
 - Removed inventory note for the `store blob forget` command now that the feature
   exists.
+- Removed inventory notes for `store blob get` and `store blob inspect` now that those commands are implemented.
 - Removed inventory note about `anybytes` helper integration.
