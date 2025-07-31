@@ -175,18 +175,19 @@ enum StoreBlobCommand {
         /// Destination file path for the downloaded blob
         output: PathBuf,
     },
-    /// Inspect a blob stored in a remote object store.
-    Inspect {
-        /// URL of the object store (e.g. "s3://bucket/path" or "file:///path")
-        url: String,
-        /// Handle of the blob to inspect (e.g. "blake3:HEX...")
-        handle: String,
-    },
+<<<<<<< HEAD
     /// Remove an object from a remote store.
     Forget {
         /// URL of the object store containing the blob (e.g. "s3://bucket/path" or "file:///path")
         url: String,
         /// Handle of the blob to remove (e.g. "blake3:HEX...")
+=======
+/// Inspect a blob stored in a remote object store.
+    Inspect {
+        /// URL of the object store (e.g. "s3://bucket/path" or "file:///path")
+        url: String,
+        /// Handle of the blob to inspect (e.g. "blake3:HEX...")
+>>>>>>> main
         handle: String,
     },
 }
@@ -444,8 +445,8 @@ fn main() -> Result<()> {
                     let file_handle = File::open(&file)?;
                     let bytes = unsafe { Bytes::map_file(&file_handle)? };
                     remote.put::<UnknownBlob, _>(bytes)?;
-                }
-                StoreBlobCommand::Get {
+                },
+StoreBlobCommand::Get {
                     url,
                     handle,
                     output,
@@ -468,7 +469,28 @@ fn main() -> Result<()> {
                     let mut file = File::create(&output)?;
                     file.write_all(&bytes)?;
                 }
-                StoreBlobCommand::Inspect { url, handle } => {
+                StoreBlobCommand::Forget { url, handle } => {
+                    use object_store::{parse_url, ObjectStore};
+                    use tribles::blob::schemas::UnknownBlob;
+                    use tribles::prelude::TryToValue;
+                    use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+                    use url::Url;
+
+                    let url = Url::parse(&url)?;
+                    let (store, path) = parse_url(&url)?;
+                    let hash_val: tribles::value::Value<Hash<Blake3>> = handle
+                        .try_to_value()
+                        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                    let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
+                        hash_val.into();
+                    let blob_path = path.child("blobs").child(hex::encode(handle_val.raw));
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()?;
+                    rt.block_on(async move { store.delete(&blob_path).await })?;
+                }
+            },
+StoreBlobCommand::Inspect { url, handle } => {
                     use file_type::FileType;
                     use futures::executor::block_on;
                     use object_store::{parse_url, ObjectStore};
@@ -507,27 +529,6 @@ fn main() -> Result<()> {
                         length,
                         name
                     );
-                }
-
-                StoreBlobCommand::Forget { url, handle } => {
-                    use object_store::{parse_url, ObjectStore};
-                    use tribles::blob::schemas::UnknownBlob;
-                    use tribles::prelude::TryToValue;
-                    use tribles::value::schemas::hash::{Blake3, Handle, Hash};
-                    use url::Url;
-
-                    let url = Url::parse(&url)?;
-                    let (store, path) = parse_url(&url)?;
-                    let hash_val: tribles::value::Value<Hash<Blake3>> = handle
-                        .try_to_value()
-                        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-                    let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
-                        hash_val.into();
-                    let blob_path = path.child("blobs").child(hex::encode(handle_val.raw));
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()?;
-                    rt.block_on(async move { store.delete(&blob_path).await })?;
                 }
             },
             StoreCommand::Branch { cmd } => match cmd {
