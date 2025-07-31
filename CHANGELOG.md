@@ -60,3 +60,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Removed inventory note for the `store blob forget` command now that the feature
   exists.
 - Removed inventory note about `anybytes` helper integration.
+- Removed stray `.orig` backup files from `src` and `tests` directories.
