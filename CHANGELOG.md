@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `pile diagnose` now exits with a nonzero code when corruption is detected.
 - `store blob list` command to enumerate object store contents.
 - `store blob put` command to upload files to object stores.
+- `store blob forget` command to remove objects from object stores.
 - `store blob inspect` command to display metadata for remote blobs.
 - `store blob get` command to download blobs from object stores.
 - `store branch list` command to list branches in an object store.
@@ -55,5 +56,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Removed inventory entry for the old `diagnose` command now that the feature is
   implemented.
 - Removed inventory item for the `pile list-blobs` command now that the feature
+  exists.
+- Removed inventory note for the `store blob forget` command now that the feature
   exists.
 - Removed inventory note about `anybytes` helper integration.
