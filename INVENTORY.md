@@ -9,3 +9,4 @@
 - Switch to using the published `tribles` crate on crates.io once available.
 
 ## Discovered Issues
+- Shared code across CLI modules could be deduplicated into utilities.
