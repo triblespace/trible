@@ -50,6 +50,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Simplified file ingestion using `anybytes::Bytes::map_file` and removed
   the `memmap2` dependency.
 - Split CLI command groups into modules under `src/cli`.
+- Rewrote README with a friendlier tone and clarified command list.
 ### Removed
 - Completed work entries have been trimmed from `INVENTORY.md` now that they are
   tracked here.
