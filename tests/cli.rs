@@ -318,6 +318,43 @@ fn store_blob_forget_removes_blob() {
 }
 
 #[test]
+fn store_blob_get_downloads_file() {
+    let dir = tempdir().unwrap();
+    let input_path = dir.path().join("input.bin");
+    let output_path = dir.path().join("output.bin");
+    let contents = b"remote blob";
+    std::fs::write(&input_path, contents).unwrap();
+
+    let url = format!("file://{}", dir.path().display());
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["store", "blob", "put", &url, input_path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let digest = blake3::hash(contents).to_hex().to_string();
+    let handle = format!("blake3:{digest}");
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "store",
+            "blob",
+            "get",
+            &url,
+            &handle,
+            output_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let out = std::fs::read(&output_path).unwrap();
+    assert_eq!(contents, &out[..]);
+}
+
+#[test]
 fn store_branch_list_outputs_id() {
     let dir = tempdir().unwrap();
     let branch_id = [1u8; 16];

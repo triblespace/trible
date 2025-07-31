@@ -166,6 +166,15 @@ enum StoreBlobCommand {
         /// File whose contents should be stored remotely
         file: PathBuf,
     },
+    /// Download a blob from a remote object store.
+    Get {
+        /// URL of the source object store (e.g. "s3://bucket/path" or "file:///path")
+        url: String,
+        /// Handle of the blob to retrieve (e.g. "blake3:HEX...")
+        handle: String,
+        /// Destination file path for the downloaded blob
+        output: PathBuf,
+    },
     /// Remove an object from a remote store.
     Forget {
         /// URL of the object store containing the blob (e.g. "s3://bucket/path" or "file:///path")
@@ -428,6 +437,29 @@ fn main() -> Result<()> {
                     let file_handle = File::open(&file)?;
                     let bytes = unsafe { Bytes::map_file(&file_handle)? };
                     remote.put::<UnknownBlob, _>(bytes)?;
+                }
+                StoreBlobCommand::Get {
+                    url,
+                    handle,
+                    output,
+                } => {
+                    use std::io::Write;
+
+                    use tribles::blob::{schemas::UnknownBlob, Bytes};
+                    use tribles::repo::objectstore::ObjectStoreRemote;
+                    use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+                    use url::Url;
+
+                    let url = Url::parse(&url)?;
+                    let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
+                    let hash: tribles::value::Value<Hash<Blake3>> = handle
+                        .try_to_value()
+                        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                    let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash.into();
+                    let reader = remote.reader();
+                    let bytes: Bytes = reader.get(handle)?;
+                    let mut file = File::create(&output)?;
+                    file.write_all(&bytes)?;
                 }
                 StoreBlobCommand::Forget { url, handle } => {
                     use object_store::{parse_url, ObjectStore};
