@@ -62,3 +62,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   exists.
 - Removed inventory notes for `store blob get` and `store blob inspect` now that those commands are implemented.
 - Removed inventory note about `anybytes` helper integration.
+- Removed stray `.orig` backup files from `src` and `tests` directories.
