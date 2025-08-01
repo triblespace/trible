@@ -49,6 +49,10 @@ Run `trible <COMMAND>` to invoke a subcommand.
 
 - `id-gen` — generate a random identifier.
 
+### Generate shell completions
+
+- `completion <SHELL>` — output a completion script for `bash`, `zsh`, or `fish`.
+
 ### Work with piles
 
 - `pile create <PATH>` — initialize an empty pile.

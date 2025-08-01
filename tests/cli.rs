@@ -20,6 +20,16 @@ fn idgen_outputs_id() {
 }
 
 #[test]
+fn completion_generates_script() {
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["completion", "bash"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("_trible()"));
+}
+
+#[test]
 fn list_branches_outputs_branch_id() {
     const MAX_SIZE: usize = 1 << 20; // small pile for tests
     let dir = tempdir().unwrap();

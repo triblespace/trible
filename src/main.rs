@@ -1,6 +1,8 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use clap_complete::Shell;
 use rand::{rngs::OsRng, RngCore};
+use std::io;
 
 pub const DEFAULT_MAX_PILE_SIZE: usize = 1 << 44; // 16 TiB
 
@@ -16,6 +18,11 @@ pub use cli::store::{StoreBlobCommand, StoreBranchCommand, StoreCommand};
 enum TribleCli {
     /// Generate a new random id.
     IdGen {},
+    /// Generate shell completion scripts.
+    Completion {
+        #[arg(value_enum)]
+        shell: Shell,
+    },
     /// Synchronize branches between piles and remote stores.
     Branch {
         #[command(subcommand)]
@@ -41,6 +48,11 @@ fn main() -> Result<()> {
             OsRng.fill_bytes(&mut id);
             let encoded_id = hex::encode(id);
             println!("{}", encoded_id.to_ascii_uppercase());
+        }
+        TribleCli::Completion { shell } => {
+            let mut cmd = TribleCli::command();
+            let bin_name = cmd.get_name().to_string();
+            clap_complete::generate(shell, &mut cmd, bin_name, &mut io::stdout());
         }
         TribleCli::Branch { cmd } => cli::branch::run(cmd)?,
         TribleCli::Pile { cmd } => cli::pile::run(cmd)?,
