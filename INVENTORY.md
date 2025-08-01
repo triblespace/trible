@@ -7,7 +7,6 @@
 - Generate shell completion scripts for bash, zsh, and fish.
 - Provide progress reporting for blob transfers and other long-running operations.
 - Switch to using the published `tribles` crate on crates.io once available.
-- Add a step-by-step quick-start example to the README.
 
 ## Discovered Issues
 - Shared code across CLI modules could be deduplicated into utilities.

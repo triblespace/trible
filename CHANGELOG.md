@@ -32,6 +32,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Structured command overview in the README.
 - Logged inventory tasks for inspection utilities, shell completions, progress reporting, and migrating to the published `tribles` crate.
 - Renamed the future `store delete` command to `store forget` in the inventory.
+- Step-by-step quick-start example in the README.
 ### Changed
 - Expanded `AGENTS.md` with sections from the Tribles project and a dedicated
   inventory subsection.
@@ -51,6 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   the `memmap2` dependency.
 - Split CLI command groups into modules under `src/cli`.
 - Rewrote README with a friendlier tone and clarified command list.
+- Corrected pile file extension in README quick-start example.
 ### Removed
 - Completed work entries have been trimmed from `INVENTORY.md` now that they are
   tracked here.
@@ -65,3 +67,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Removed inventory notes for `store blob get` and `store blob inspect` now that those commands are implemented.
 - Removed inventory note about `anybytes` helper integration.
 - Removed stray `.orig` backup files from `src` and `tests` directories.
+- Removed inventory note for a README quick-start example now that the section exists.

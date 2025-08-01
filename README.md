@@ -12,6 +12,35 @@ Trible CLI is a friendly companion for exploring and managing
 cargo install --path .
 ```
 
+## Quick Start
+
+1. Create a new pile to hold your data:
+
+   ```bash
+   trible pile create demo.pile
+   ```
+
+2. Add a file as a blob. This command prints a handle for the stored blob:
+
+   ```bash
+   echo "hello" > greeting.txt
+   trible pile blob put demo.pile greeting.txt
+   ```
+
+3. List the blobs in the pile to confirm the handle:
+
+   ```bash
+   trible pile blob list demo.pile
+   ```
+
+4. Retrieve the blob using its handle:
+
+   ```bash
+   trible pile blob get demo.pile <HANDLE> copy.txt
+   ```
+
+The file `copy.txt` now contains the original contents of `greeting.txt`.
+
 ## Usage
 
 Run `trible <COMMAND>` to invoke a subcommand.
