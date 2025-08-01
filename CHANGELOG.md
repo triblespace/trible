@@ -33,6 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Logged inventory tasks for inspection utilities, shell completions, progress reporting, and migrating to the published `tribles` crate.
 - Renamed the future `store delete` command to `store forget` in the inventory.
 - Step-by-step quick-start example in the README.
+- `completion` command to generate shell scripts for bash, zsh, and fish.
 ### Changed
 - Expanded `AGENTS.md` with sections from the Tribles project and a dedicated
   inventory subsection.
@@ -58,6 +59,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Completed work entries have been trimmed from `INVENTORY.md` now that they are
   tracked here.
 - Removed completed inventory item for crate metadata expansion.
+- Removed inventory note for shell completions now that the feature exists.
 - Removed note from README suggesting `touch` can create empty piles.
 - Removed inventory entry for the old `diagnose` command now that the feature is
   implemented.
