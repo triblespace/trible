@@ -3,10 +3,9 @@ use clap::Parser;
 use rand::rngs::OsRng;
 use std::{fs::File, path::PathBuf};
 
+use super::util::parse_blob_handle;
 use crate::DEFAULT_MAX_PILE_SIZE;
-use tribles::prelude::{
-    BlobStore, BlobStoreGet, BlobStoreList, BlobStorePut, BranchStore, TryToValue,
-};
+use tribles::prelude::{BlobStore, BlobStoreGet, BlobStoreList, BlobStorePut, BranchStore};
 
 #[derive(Parser)]
 pub enum PileCommand {
@@ -144,15 +143,14 @@ pub fn run(cmd: PileCommand) -> Result<()> {
 
                 use tribles::blob::{schemas::UnknownBlob, Bytes};
                 use tribles::repo::pile::Pile;
-                use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+                use tribles::value::schemas::hash::{Blake3, Handle};
 
                 let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
-                let hash: tribles::value::Value<Hash<Blake3>> = handle
-                    .try_to_value()
-                    .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-                let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash.into();
+                let hash_val = parse_blob_handle(&handle)?;
+                let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
+                    hash_val.clone().into();
                 let reader = pile.reader();
-                let bytes: Bytes = reader.get(handle)?;
+                let bytes: Bytes = reader.get(handle_val)?;
                 let mut file = File::create(&output)?;
                 file.write_all(&bytes)?;
             }
@@ -163,14 +161,12 @@ pub fn run(cmd: PileCommand) -> Result<()> {
 
                 use tribles::blob::{schemas::UnknownBlob, Blob};
                 use tribles::repo::pile::{BlobMetadata, Pile};
-                use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+                use tribles::value::schemas::hash::{Blake3, Handle};
 
                 let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
-                let hash_val: tribles::value::Value<Hash<Blake3>> = handle
-                    .try_to_value()
-                    .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                let hash_val = parse_blob_handle(&handle)?;
                 let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
-                    hash_val.into();
+                    hash_val.clone().into();
                 let reader = pile.reader();
                 let blob: Blob<UnknownBlob> = reader.get(handle_val)?;
                 let metadata: BlobMetadata = reader
