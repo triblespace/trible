@@ -65,7 +65,7 @@ Run `trible <COMMAND>` to invoke a subcommand.
 
 #### Blobs
 
-- `pile blob list <PILE>` — list stored blob handles.
+- `pile blob list [--metadata] <PILE>` — list stored blob handles. Pass `--metadata` to include timestamps and sizes.
 - `pile blob put <PILE> <FILE>` — store a file as a blob and print its handle.
 - `pile blob get <PILE> <HANDLE> <OUTPUT>` — extract a blob by handle.
 - `pile blob inspect <PILE> <HANDLE>` — display metadata for a stored blob.

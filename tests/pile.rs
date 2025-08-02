@@ -170,6 +170,44 @@ fn list_blobs_outputs_expected_handle() {
 }
 
 #[test]
+fn list_blobs_with_metadata_outputs_details() {
+    let dir = tempdir().unwrap();
+    let pile_path = dir.path().join("list_blobs_meta.pile");
+    let input_path = dir.path().join("input.bin");
+    let contents = b"hello";
+    std::fs::write(&input_path, contents).unwrap();
+
+    let digest = blake3::hash(contents).to_hex().to_string();
+    let handle = format!("blake3:{digest}");
+    let pattern = format!(r"^{}\t\S+\t{}\n$", handle, contents.len());
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "blob",
+            "put",
+            pile_path.to_str().unwrap(),
+            input_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "blob",
+            "list",
+            "--metadata",
+            pile_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match(&pattern).unwrap());
+}
+
+#[test]
 fn diagnose_reports_healthy() {
     let dir = tempdir().unwrap();
     let pile_path = dir.path().join("diag.pile");

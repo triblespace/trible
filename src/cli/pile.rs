@@ -56,6 +56,9 @@ pub enum BlobCommand {
     List {
         /// Path to the pile file to inspect
         path: PathBuf,
+        /// Show creation time and size for each blob
+        #[arg(long)]
+        metadata: bool,
     },
     /// Ingest a file into a pile, creating the pile if necessary.
     Put {
@@ -109,7 +112,10 @@ pub fn run(cmd: PileCommand) -> Result<()> {
             }
         },
         PileCommand::Blob { cmd } => match cmd {
-            BlobCommand::List { path } => {
+            BlobCommand::List { path, metadata } => {
+                use chrono::{DateTime, Utc};
+                use std::time::{Duration, UNIX_EPOCH};
+
                 use tribles::blob::schemas::UnknownBlob;
                 use tribles::repo::pile::Pile;
                 use tribles::value::schemas::hash::{Blake3, Handle, Hash};
@@ -118,9 +124,19 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                 let reader = pile.reader();
                 for handle in reader.blobs() {
                     let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = handle?;
-                    let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
+                    let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle.clone());
                     let string: String = hash.from_value();
-                    println!("{}", string);
+                    if metadata {
+                        if let Some(meta) = reader.metadata(handle) {
+                            let dt = UNIX_EPOCH + Duration::from_millis(meta.timestamp);
+                            let time: DateTime<Utc> = DateTime::<Utc>::from(dt);
+                            println!("{}\t{}\t{}", string, time.to_rfc3339(), meta.length);
+                        } else {
+                            println!("{}", string);
+                        }
+                    } else {
+                        println!("{}", string);
+                    }
                 }
             }
             BlobCommand::Put { pile, file } => {
