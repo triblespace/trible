@@ -16,8 +16,8 @@ pub use cli::store::{StoreBlobCommand, StoreBranchCommand, StoreCommand};
 /// A knowledge graph and meta file system for object stores.
 ///
 enum TribleCli {
-    /// Generate a new random id.
-    IdGen {},
+    /// Generate a new random identifier.
+    Genid,
     /// Generate shell completion scripts.
     Completion {
         #[arg(value_enum)]
@@ -43,7 +43,7 @@ enum TribleCli {
 fn main() -> Result<()> {
     let args = TribleCli::parse();
     match args {
-        TribleCli::IdGen {} => {
+        TribleCli::Genid => {
             let mut id = [0u8; 16];
             OsRng.fill_bytes(&mut id);
             let encoded_id = hex::encode(id);

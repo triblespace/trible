@@ -47,7 +47,7 @@ Run `trible <COMMAND>` to invoke a subcommand.
 
 ### Generate identifiers
 
-- `id-gen` — generate a random identifier.
+- `genid` — generate a random identifier.
 
 ### Generate shell completions
 
