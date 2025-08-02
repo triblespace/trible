@@ -9,4 +9,4 @@
 
 ## Discovered Issues
 - Object store operations rely on an async runtime; consider synchronous alternatives.
-- CLI integration tests live in a single large file; consider splitting them into modules for readability.
+- Preflight script and test suite take an unusually long time to run; investigate ways to reduce build and execution time.
