@@ -35,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Step-by-step quick-start example in the README.
 - `completion` command to generate shell scripts for bash, zsh, and fish.
 - Test ensuring `pile blob list` outputs the exact handle for ingested blobs.
+- Optional metadata output for `pile blob list`.
 ### Changed
 - Renamed `id-gen` command to `genid` to align with the GenID schema.
 - Expanded `AGENTS.md` with sections from the Tribles project and a dedicated
