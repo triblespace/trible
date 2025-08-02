@@ -90,14 +90,17 @@ pub fn run(cmd: StoreCommand) -> Result<()> {
             StoreBlobCommand::Put { url, file } => {
                 use tribles::blob::{schemas::UnknownBlob, Bytes};
                 use tribles::repo::objectstore::ObjectStoreRemote;
-                use tribles::value::schemas::hash::Blake3;
+                use tribles::value::schemas::hash::{Blake3, Handle, Hash};
                 use url::Url;
 
                 let url = Url::parse(&url)?;
                 let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
                 let file_handle = File::open(&file)?;
                 let bytes = unsafe { Bytes::map_file(&file_handle)? };
-                remote.put::<UnknownBlob, _>(bytes)?;
+                let handle = remote.put::<UnknownBlob, _>(bytes)?;
+                let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
+                let string: String = hash.from_value();
+                println!("{}", string);
             }
             StoreBlobCommand::Get {
                 url,

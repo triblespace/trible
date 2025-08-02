@@ -74,6 +74,10 @@ fn put_ingests_file() {
     let input_path = dir.path().join("input.bin");
     std::fs::write(&input_path, b"hello world").unwrap();
 
+    let digest = blake3::hash(b"hello world").to_hex().to_string();
+    let handle = format!("blake3:{digest}");
+    let pattern = format!("^{}\\n$", handle);
+
     Command::cargo_bin("trible")
         .unwrap()
         .args([
@@ -85,7 +89,7 @@ fn put_ingests_file() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::is_empty());
+        .stdout(predicate::str::is_match(pattern).unwrap());
 
     const MAX_SIZE: usize = 1 << 20; // small pile for tests
     let mut pile: Pile<MAX_SIZE> = Pile::open(&pile_path).unwrap();
@@ -283,14 +287,17 @@ fn store_blob_put_uploads_file() {
 
     let url = format!("file://{}", dir.path().display());
 
+    let digest = blake3::hash(contents).to_hex().to_string();
+    let handle = format!("blake3:{digest}");
+    let pattern = format!("^{}\\n$", handle);
+
     Command::cargo_bin("trible")
         .unwrap()
         .args(["store", "blob", "put", &url, file_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::is_empty());
+        .stdout(predicate::str::is_match(&pattern).unwrap());
 
-    let digest = blake3::hash(contents).to_hex().to_string();
     let blob_path = dir.path().join("blobs").join(digest);
     assert!(blob_path.exists());
 }
@@ -304,14 +311,16 @@ fn store_blob_forget_removes_blob() {
 
     let url = format!("file://{}", dir.path().display());
 
+    let digest = blake3::hash(contents).to_hex().to_string();
+    let handle = format!("blake3:{digest}");
+    let pattern = format!("^{}\\n$", handle);
+
     Command::cargo_bin("trible")
         .unwrap()
         .args(["store", "blob", "put", &url, file_path.to_str().unwrap()])
         .assert()
-        .success();
-
-    let digest = blake3::hash(contents).to_hex().to_string();
-    let handle = format!("blake3:{digest}");
+        .success()
+        .stdout(predicate::str::is_match(&pattern).unwrap());
 
     Command::cargo_bin("trible")
         .unwrap()
@@ -373,14 +382,16 @@ fn store_blob_inspect_outputs_metadata() {
 
     let url = format!("file://{}", dir.path().display());
 
+    let digest = blake3::hash(contents).to_hex().to_string();
+    let handle = format!("blake3:{digest}");
+    let pattern = format!("^{}\\n$", handle);
+
     Command::cargo_bin("trible")
         .unwrap()
         .args(["store", "blob", "put", &url, file_path.to_str().unwrap()])
         .assert()
-        .success();
-
-    let digest = blake3::hash(contents).to_hex().to_string();
-    let handle = format!("blake3:{digest}");
+        .success()
+        .stdout(predicate::str::is_match(&pattern).unwrap());
 
     Command::cargo_bin("trible")
         .unwrap()

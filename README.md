@@ -66,7 +66,7 @@ Run `trible <COMMAND>` to invoke a subcommand.
 #### Blobs
 
 - `pile blob list <PILE>` — list stored blob handles.
-- `pile blob put <PILE> <FILE>` — store a file as a blob.
+- `pile blob put <PILE> <FILE>` — store a file as a blob and print its handle.
 - `pile blob get <PILE> <HANDLE> <OUTPUT>` — extract a blob by handle.
 - `pile blob inspect <PILE> <HANDLE>` — display metadata for a stored blob.
 
@@ -75,7 +75,7 @@ Run `trible <COMMAND>` to invoke a subcommand.
 #### Blobs
 
 - `store blob list <URL>` — list objects at a remote store.
-- `store blob put <URL> <FILE>` — upload a file to a remote store.
+- `store blob put <URL> <FILE>` — upload a file to a remote store and print its handle.
 - `store blob get <URL> <HANDLE> <OUTPUT>` — download a blob from a remote store.
 - `store blob forget <URL> <HANDLE>` — remove an object from a remote store.
 - `store blob inspect <URL> <HANDLE>` — display metadata for a remote blob.
