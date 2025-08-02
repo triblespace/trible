@@ -138,11 +138,16 @@ fn get_restores_blob() {
 }
 
 #[test]
-fn list_blobs_outputs_handle() {
+fn list_blobs_outputs_expected_handle() {
     let dir = tempdir().unwrap();
     let pile_path = dir.path().join("list_blobs.pile");
     let input_path = dir.path().join("input.bin");
-    std::fs::write(&input_path, b"hello").unwrap();
+    let contents = b"hello";
+    std::fs::write(&input_path, contents).unwrap();
+
+    let digest = blake3::hash(contents).to_hex().to_string();
+    let handle = format!("blake3:{digest}");
+    let pattern = format!("^{}\\n$", handle);
 
     Command::cargo_bin("trible")
         .unwrap()
@@ -161,7 +166,7 @@ fn list_blobs_outputs_handle() {
         .args(["pile", "blob", "list", pile_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::is_match("^blake3:[a-f0-9]{64}\\n$").unwrap());
+        .stdout(predicate::str::is_match(&pattern).unwrap());
 }
 
 #[test]
