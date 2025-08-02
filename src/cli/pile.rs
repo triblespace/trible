@@ -126,12 +126,15 @@ pub fn run(cmd: PileCommand) -> Result<()> {
             BlobCommand::Put { pile, file } => {
                 use tribles::blob::{schemas::UnknownBlob, Bytes};
                 use tribles::repo::pile::Pile;
-                use tribles::value::schemas::hash::Blake3;
+                use tribles::value::schemas::hash::{Blake3, Handle, Hash};
 
                 let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
                 let file_handle = File::open(&file)?;
                 let bytes = unsafe { Bytes::map_file(&file_handle)? };
-                pile.put::<UnknownBlob, _>(bytes)?;
+                let handle = pile.put::<UnknownBlob, _>(bytes)?;
+                let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
+                let string: String = hash.from_value();
+                println!("{}", string);
                 pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             }
             BlobCommand::Get {
