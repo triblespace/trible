@@ -10,10 +10,10 @@ use tribles::prelude::{BlobStore, BlobStoreList};
 use tribles::repo::{pile::Pile, Repository};
 
 #[test]
-fn idgen_outputs_id() {
+fn genid_outputs_id() {
     Command::cargo_bin("trible")
         .unwrap()
-        .arg("id-gen")
+        .arg("genid")
         .assert()
         .success()
         .stdout(predicate::str::is_match("^[A-F0-9]{32}\n$").unwrap());

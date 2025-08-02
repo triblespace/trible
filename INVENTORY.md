@@ -9,3 +9,4 @@
 
 ## Discovered Issues
 - Object store operations rely on an async runtime; consider synchronous alternatives.
+- CLI integration tests live in a single large file; consider splitting them into modules for readability.

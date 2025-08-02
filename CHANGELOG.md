@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 ### Added
 - Initial changelog with Let's Changelog format.
-- Integration tests for `id-gen` and `pile list-branches` commands.
+- Integration tests for `genid` and `pile list-branches` commands.
 - `pile create` command to initialize new pile files.
 - Note that `touch` on Unix can also create an empty pile file.
 - `pile put` command for ingesting a file into a pile.
@@ -35,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Step-by-step quick-start example in the README.
 - `completion` command to generate shell scripts for bash, zsh, and fish.
 ### Changed
+- Renamed `id-gen` command to `genid` to align with the GenID schema.
 - Expanded `AGENTS.md` with sections from the Tribles project and a dedicated
   inventory subsection.
 - Expanded crate metadata with additional keywords and categories.
