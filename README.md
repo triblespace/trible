@@ -55,7 +55,7 @@ Run `trible <COMMAND>` to invoke a subcommand.
 
 ### Work with piles
 
-- `pile create <PATH>` — initialize an empty pile.
+- `pile create <PATH>` — initialize an empty pile, creating parent directories as needed.
 - `pile diagnose <PILE>` — verify pile integrity.
 
 #### Branches

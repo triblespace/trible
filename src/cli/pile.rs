@@ -192,8 +192,13 @@ pub fn run(cmd: PileCommand) -> Result<()> {
             }
         },
         PileCommand::Create { path } => {
+            use std::fs;
             use tribles::repo::pile::Pile;
             use tribles::value::schemas::hash::Blake3;
+
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
 
             let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&path)?;
             pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;

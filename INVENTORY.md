@@ -6,6 +6,7 @@
 - Inspection utilities for listing entities, attributes, and relations, with optional filtering.
 - Provide progress reporting for blob transfers and other long-running operations.
 - Switch to using the published `tribles` crate on crates.io once available.
+- Allow specifying a custom maximum pile size when creating piles.
 
 ## Discovered Issues
 - Object store operations rely on an async runtime; consider synchronous alternatives.

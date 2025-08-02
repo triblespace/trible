@@ -59,6 +59,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `pile blob put` and `store blob put` now print the blob handle after
   ingestion.
 - Split CLI integration tests into smaller modules for readability.
+- `pile create` now creates parent directories if they do not exist.
 ### Removed
 - Completed work entries have been trimmed from `INVENTORY.md` now that they are
   tracked here.

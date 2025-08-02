@@ -47,6 +47,25 @@ fn create_initializes_empty_pile() {
 }
 
 #[test]
+fn create_creates_parent_directories() {
+    let dir = tempdir().unwrap();
+    let path = dir
+        .path()
+        .join("nested")
+        .join("dirs")
+        .join("create_test.pile");
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["pile", "create", path.to_str().unwrap()])
+        .assert()
+        .success();
+
+    assert!(path.exists());
+    assert!(path.parent().unwrap().exists());
+}
+
+#[test]
 fn put_ingests_file() {
     let dir = tempdir().unwrap();
     let pile_path = dir.path().join("put_test.pile");
