@@ -79,3 +79,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Removed stray `.orig` backup files from `src` and `tests` directories.
 - Removed inventory note for a README quick-start example now that the section exists.
 - Removed inventory note about offering an option for the `completion` command to write scripts directly to a file.
+- Removed inventory entry for enhancing `pile blob list` with optional filtering.
