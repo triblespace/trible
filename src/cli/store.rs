@@ -1,8 +1,12 @@
 use super::util::parse_blob_handle;
 use anyhow::Result;
 use clap::Parser;
-use std::{fs::File, path::PathBuf};
-use tribles::prelude::{BlobStore, BlobStoreGet, BlobStorePut, BranchStore};
+use std::fs::File;
+use std::path::PathBuf;
+use tribles::prelude::BlobStore;
+use tribles::prelude::BlobStoreGet;
+use tribles::prelude::BlobStorePut;
+use tribles::prelude::BranchStore;
 
 #[derive(Parser)]
 pub enum StoreCommand {
@@ -71,7 +75,8 @@ pub fn run(cmd: StoreCommand) -> Result<()> {
         StoreCommand::Blob { cmd } => match cmd {
             StoreBlobCommand::List { url } => {
                 use futures::StreamExt;
-                use object_store::{parse_url, ObjectStore};
+                use object_store::parse_url;
+                use object_store::ObjectStore;
                 use url::Url;
 
                 let url = Url::parse(&url)?;
@@ -88,9 +93,12 @@ pub fn run(cmd: StoreCommand) -> Result<()> {
                 })?;
             }
             StoreBlobCommand::Put { url, file } => {
-                use tribles::blob::{schemas::UnknownBlob, Bytes};
+                use tribles::blob::schemas::UnknownBlob;
+                use tribles::blob::Bytes;
                 use tribles::repo::objectstore::ObjectStoreRemote;
-                use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+                use tribles::value::schemas::hash::Blake3;
+                use tribles::value::schemas::hash::Handle;
+                use tribles::value::schemas::hash::Hash;
                 use url::Url;
 
                 let url = Url::parse(&url)?;
@@ -100,7 +108,7 @@ pub fn run(cmd: StoreCommand) -> Result<()> {
                 let handle = remote.put::<UnknownBlob, _>(bytes)?;
                 let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
                 let string: String = hash.from_value();
-                println!("{}", string);
+                println!("{string}");
             }
             StoreBlobCommand::Get {
                 url,
@@ -109,16 +117,18 @@ pub fn run(cmd: StoreCommand) -> Result<()> {
             } => {
                 use std::io::Write;
 
-                use tribles::blob::{schemas::UnknownBlob, Bytes};
+                use tribles::blob::schemas::UnknownBlob;
+                use tribles::blob::Bytes;
                 use tribles::repo::objectstore::ObjectStoreRemote;
-                use tribles::value::schemas::hash::{Blake3, Handle};
+                use tribles::value::schemas::hash::Blake3;
+                use tribles::value::schemas::hash::Handle;
                 use url::Url;
 
                 let url = Url::parse(&url)?;
                 let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
                 let hash_val = parse_blob_handle(&handle)?;
                 let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
-                    hash_val.clone().into();
+                    hash_val.into();
                 let reader = remote.reader();
                 let bytes: Bytes = reader.get(handle_val)?;
                 let mut file = File::create(&output)?;
@@ -127,17 +137,20 @@ pub fn run(cmd: StoreCommand) -> Result<()> {
             StoreBlobCommand::Inspect { url, handle } => {
                 use file_type::FileType;
                 use futures::executor::block_on;
-                use object_store::{parse_url, ObjectStore};
-                use tribles::blob::{schemas::UnknownBlob, Blob};
+                use object_store::parse_url;
+                use object_store::ObjectStore;
+                use tribles::blob::schemas::UnknownBlob;
+                use tribles::blob::Blob;
                 use tribles::repo::objectstore::ObjectStoreRemote;
-                use tribles::value::schemas::hash::{Blake3, Handle};
+                use tribles::value::schemas::hash::Blake3;
+                use tribles::value::schemas::hash::Handle;
                 use url::Url;
 
                 let url = Url::parse(&url)?;
                 let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
                 let hash_val = parse_blob_handle(&handle)?;
                 let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
-                    hash_val.clone().into();
+                    hash_val.into();
                 let handle_str: String = hash_val.clone().from_value();
                 let reader = remote.reader();
                 let blob: Blob<UnknownBlob> = reader.get(handle_val)?;
@@ -145,7 +158,7 @@ pub fn run(cmd: StoreCommand) -> Result<()> {
                 let (store, base) = parse_url(&url)?;
                 let handle_hex = handle_str
                     .split(':')
-                    .last()
+                    .next_back()
                     .ok_or_else(|| anyhow::anyhow!("invalid handle"))?;
                 let path = base.child("blobs").child(handle_hex);
                 let meta = block_on(async { store.head(&path).await })?;
@@ -163,16 +176,18 @@ pub fn run(cmd: StoreCommand) -> Result<()> {
                 );
             }
             StoreBlobCommand::Forget { url, handle } => {
-                use object_store::{parse_url, ObjectStore};
+                use object_store::parse_url;
+                use object_store::ObjectStore;
                 use tribles::blob::schemas::UnknownBlob;
-                use tribles::value::schemas::hash::{Blake3, Handle};
+                use tribles::value::schemas::hash::Blake3;
+                use tribles::value::schemas::hash::Handle;
                 use url::Url;
 
                 let url = Url::parse(&url)?;
                 let (store, path) = parse_url(&url)?;
                 let hash_val = parse_blob_handle(&handle)?;
                 let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
-                    hash_val.clone().into();
+                    hash_val.into();
                 let blob_path = path.child("blobs").child(hex::encode(handle_val.raw));
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()

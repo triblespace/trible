@@ -1,12 +1,13 @@
 use assert_cmd::Command;
-use blake3;
 use ed25519_dalek::SigningKey;
 use predicates::prelude::*;
 use rand::rngs::OsRng;
 use tempfile::tempdir;
+use tribles::prelude::BlobStore;
+use tribles::prelude::BlobStoreList;
 use tribles::prelude::BranchStore;
-use tribles::prelude::{BlobStore, BlobStoreList};
-use tribles::repo::{pile::Pile, Repository};
+use tribles::repo::pile::Pile;
+use tribles::repo::Repository;
 
 #[test]
 fn list_branches_outputs_branch_id() {
@@ -74,7 +75,7 @@ fn put_ingests_file() {
 
     let digest = blake3::hash(b"hello world").to_hex().to_string();
     let handle = format!("blake3:{digest}");
-    let pattern = format!("^{}\\n$", handle);
+    let pattern = format!("^{handle}\\n$");
 
     Command::cargo_bin("trible")
         .unwrap()
@@ -147,7 +148,7 @@ fn list_blobs_outputs_expected_handle() {
 
     let digest = blake3::hash(contents).to_hex().to_string();
     let handle = format!("blake3:{digest}");
-    let pattern = format!("^{}\\n$", handle);
+    let pattern = format!("^{handle}\\n$");
 
     Command::cargo_bin("trible")
         .unwrap()
@@ -229,7 +230,8 @@ fn diagnose_reports_healthy() {
 
 #[test]
 fn diagnose_reports_invalid_hash() {
-    use std::io::{Seek, Write};
+    use std::io::Seek;
+    use std::io::Write;
 
     let dir = tempdir().unwrap();
     let pile_path = dir.path().join("bad.pile");

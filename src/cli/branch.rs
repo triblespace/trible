@@ -1,9 +1,11 @@
 use anyhow::Result;
 use clap::Parser;
-use std::{convert::TryInto, path::PathBuf};
+use std::convert::TryInto;
+use std::path::PathBuf;
 
 use crate::DEFAULT_MAX_PILE_SIZE;
-use tribles::prelude::{BlobStore, BranchStore};
+use tribles::prelude::BlobStore;
+use tribles::prelude::BranchStore;
 
 #[derive(Parser)]
 pub enum BranchCommand {

@@ -1,12 +1,10 @@
 use assert_cmd::Command;
-use blake3;
 use ed25519_dalek::SigningKey;
-use hex;
 use predicates::prelude::*;
 use rand::rngs::OsRng;
 use tempfile::tempdir;
-use tribles::prelude::BranchStore;
-use tribles::repo::{pile::Pile, Repository};
+use tribles::repo::pile::Pile;
+use tribles::repo::Repository;
 
 #[test]
 fn store_blob_list_outputs_file() {
@@ -35,7 +33,7 @@ fn store_blob_put_uploads_file() {
 
     let digest = blake3::hash(contents).to_hex().to_string();
     let handle = format!("blake3:{digest}");
-    let pattern = format!("^{}\\n$", handle);
+    let pattern = format!("^{handle}\\n$");
 
     Command::cargo_bin("trible")
         .unwrap()
@@ -59,7 +57,7 @@ fn store_blob_forget_removes_blob() {
 
     let digest = blake3::hash(contents).to_hex().to_string();
     let handle = format!("blake3:{digest}");
-    let pattern = format!("^{}\\n$", handle);
+    let pattern = format!("^{handle}\\n$");
 
     Command::cargo_bin("trible")
         .unwrap()
@@ -130,7 +128,7 @@ fn store_blob_inspect_outputs_metadata() {
 
     let digest = blake3::hash(contents).to_hex().to_string();
     let handle = format!("blake3:{digest}");
-    let pattern = format!("^{}\\n$", handle);
+    let pattern = format!("^{handle}\\n$");
 
     Command::cargo_bin("trible")
         .unwrap()

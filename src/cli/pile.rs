@@ -1,11 +1,16 @@
 use anyhow::Result;
 use clap::Parser;
 use rand::rngs::OsRng;
-use std::{fs::File, path::PathBuf};
+use std::fs::File;
+use std::path::PathBuf;
 
 use super::util::parse_blob_handle;
 use crate::DEFAULT_MAX_PILE_SIZE;
-use tribles::prelude::{BlobStore, BlobStoreGet, BlobStoreList, BlobStorePut, BranchStore};
+use tribles::prelude::BlobStore;
+use tribles::prelude::BlobStoreGet;
+use tribles::prelude::BlobStoreList;
+use tribles::prelude::BlobStorePut;
+use tribles::prelude::BranchStore;
 
 #[derive(Parser)]
 pub enum PileCommand {
@@ -113,18 +118,22 @@ pub fn run(cmd: PileCommand) -> Result<()> {
         },
         PileCommand::Blob { cmd } => match cmd {
             BlobCommand::List { path, metadata } => {
-                use chrono::{DateTime, Utc};
-                use std::time::{Duration, UNIX_EPOCH};
+                use chrono::DateTime;
+                use chrono::Utc;
+                use std::time::Duration;
+                use std::time::UNIX_EPOCH;
 
                 use tribles::blob::schemas::UnknownBlob;
                 use tribles::repo::pile::Pile;
-                use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+                use tribles::value::schemas::hash::Blake3;
+                use tribles::value::schemas::hash::Handle;
+                use tribles::value::schemas::hash::Hash;
 
                 let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&path)?;
                 let reader = pile.reader();
                 for handle in reader.blobs() {
                     let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = handle?;
-                    let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle.clone());
+                    let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
                     let string: String = hash.from_value();
                     if metadata {
                         if let Some(meta) = reader.metadata(handle) {
@@ -132,17 +141,20 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                             let time: DateTime<Utc> = DateTime::<Utc>::from(dt);
                             println!("{}\t{}\t{}", string, time.to_rfc3339(), meta.length);
                         } else {
-                            println!("{}", string);
+                            println!("{string}");
                         }
                     } else {
-                        println!("{}", string);
+                        println!("{string}");
                     }
                 }
             }
             BlobCommand::Put { pile, file } => {
-                use tribles::blob::{schemas::UnknownBlob, Bytes};
+                use tribles::blob::schemas::UnknownBlob;
+                use tribles::blob::Bytes;
                 use tribles::repo::pile::Pile;
-                use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+                use tribles::value::schemas::hash::Blake3;
+                use tribles::value::schemas::hash::Handle;
+                use tribles::value::schemas::hash::Hash;
 
                 let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
                 let file_handle = File::open(&file)?;
@@ -150,7 +162,7 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                 let handle = pile.put::<UnknownBlob, _>(bytes)?;
                 let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
                 let string: String = hash.from_value();
-                println!("{}", string);
+                println!("{string}");
                 pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             }
             BlobCommand::Get {
@@ -160,32 +172,39 @@ pub fn run(cmd: PileCommand) -> Result<()> {
             } => {
                 use std::io::Write;
 
-                use tribles::blob::{schemas::UnknownBlob, Bytes};
+                use tribles::blob::schemas::UnknownBlob;
+                use tribles::blob::Bytes;
                 use tribles::repo::pile::Pile;
-                use tribles::value::schemas::hash::{Blake3, Handle};
+                use tribles::value::schemas::hash::Blake3;
+                use tribles::value::schemas::hash::Handle;
 
                 let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
                 let hash_val = parse_blob_handle(&handle)?;
                 let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
-                    hash_val.clone().into();
+                    hash_val.into();
                 let reader = pile.reader();
                 let bytes: Bytes = reader.get(handle_val)?;
                 let mut file = File::create(&output)?;
                 file.write_all(&bytes)?;
             }
             BlobCommand::Inspect { pile, handle } => {
-                use chrono::{DateTime, Utc};
+                use chrono::DateTime;
+                use chrono::Utc;
                 use file_type::FileType;
-                use std::time::{Duration, UNIX_EPOCH};
+                use std::time::Duration;
+                use std::time::UNIX_EPOCH;
 
-                use tribles::blob::{schemas::UnknownBlob, Blob};
-                use tribles::repo::pile::{BlobMetadata, Pile};
-                use tribles::value::schemas::hash::{Blake3, Handle};
+                use tribles::blob::schemas::UnknownBlob;
+                use tribles::blob::Blob;
+                use tribles::repo::pile::BlobMetadata;
+                use tribles::repo::pile::Pile;
+                use tribles::value::schemas::hash::Blake3;
+                use tribles::value::schemas::hash::Handle;
 
                 let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
                 let hash_val = parse_blob_handle(&handle)?;
                 let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
-                    hash_val.clone().into();
+                    hash_val.into();
                 let reader = pile.reader();
                 let blob: Blob<UnknownBlob> = reader.get(handle_val)?;
                 let metadata: BlobMetadata = reader
@@ -220,8 +239,11 @@ pub fn run(cmd: PileCommand) -> Result<()> {
             pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
         }
         PileCommand::Diagnose { pile } => {
-            use tribles::repo::pile::{OpenError, Pile};
-            use tribles::value::schemas::hash::{Blake3, Handle, Hash};
+            use tribles::repo::pile::OpenError;
+            use tribles::repo::pile::Pile;
+            use tribles::value::schemas::hash::Blake3;
+            use tribles::value::schemas::hash::Handle;
+            use tribles::value::schemas::hash::Hash;
 
             match Pile::<DEFAULT_MAX_PILE_SIZE, Blake3>::try_open(&pile) {
                 Ok(mut pile) => {
