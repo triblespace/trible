@@ -125,7 +125,7 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
             use tribles::id::Id;
             use tribles::prelude::blobschemas::SimpleArchive;
             use tribles::prelude::valueschemas::Handle;
-            use tribles::repo;
+
             use tribles::repo::pile::Pile;
             use tribles::trible::TribleSet;
             use tribles::value::schemas::hash::Blake3;
@@ -226,7 +226,7 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
                     .map(|e| format!(" ({e})"))
                     .unwrap_or_default()
             );
-            if let Some(h) = head_val.clone() {
+            if let Some(h) = head_val {
                 let head_hash: Value<Hash<Blake3>> = Handle::to_hash(h);
                 let head_hex: String = head_hash.from_value();
                 println!("Head:      blake3:{head_hex}");

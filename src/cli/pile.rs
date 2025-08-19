@@ -243,7 +243,7 @@ pub fn run(cmd: PileCommand) -> Result<()> {
         }
         PileCommand::Diagnose { pile, fail_fast } => {
             use tribles::prelude::blobschemas::SimpleArchive;
-            use tribles::prelude::Id;
+
             use tribles::repo::pile::OpenError;
             use tribles::repo::pile::Pile;
             use tribles::trible::TribleSet;
@@ -418,7 +418,7 @@ pub fn run(cmd: PileCommand) -> Result<()> {
 
                                 // If head missing or undecodable, try to find a last recoverable head from history
                                 let mut head_present = false;
-                                if let Some(h) = head_val.clone() {
+                                if let Some(h) = head_val {
                                     head_present = reader.metadata(h).is_some();
                                 }
                                 let mut proposed_recoverable: Option<(
@@ -495,7 +495,7 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                                     }
                                 }
 
-                                if let Some(h) = head_val.clone().or_else(|| {
+                                if let Some(h) = head_val.or_else(|| {
                                     proposed_recoverable.as_ref().map(|(h, _, _, _)| *h)
                                 }) {
                                     // Verify entire commit DAG reachable from head
