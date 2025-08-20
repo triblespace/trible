@@ -57,6 +57,29 @@ pub enum BranchCommand {
         #[arg(long, default_value_t = 50)]
         limit: usize,
     },
+    /// Import reachable blobs from a source branch into a target pile and
+    /// attach them to the target branch via a single merge commit.
+    MergeImport {
+        /// Path to the source pile file
+        #[arg(long)]
+        from_pile: PathBuf,
+        /// Source branch identifier (hex). Mutually exclusive with --from-name
+        #[arg(long, conflicts_with = "from_name")]
+        from_id: Option<String>,
+        /// Source branch name. Mutually exclusive with --from-id
+        #[arg(long, conflicts_with = "from_id")]
+        from_name: Option<String>,
+
+        /// Path to the destination pile file
+        #[arg(long)]
+        to_pile: PathBuf,
+        /// Destination branch identifier (hex). Mutually exclusive with --to-name
+        #[arg(long, conflicts_with = "to_name")]
+        to_id: Option<String>,
+        /// Destination branch name. Mutually exclusive with --to-id
+        #[arg(long, conflicts_with = "to_id")]
+        to_name: Option<String>,
+    },
 }
 
 pub fn run(cmd: BranchCommand) -> Result<()> {
@@ -235,7 +258,7 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
             } else {
                 println!("Head:      (unknown: metadata missing or undecodable)");
             }
-        }
+        }         
         BranchCommand::History {
             pile,
             id,
@@ -342,6 +365,91 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
             if printed == 0 {
                 println!("No metadata entries found for this branch in pile blobs.");
             }
+        }
+        BranchCommand::MergeImport {
+            from_pile,
+            from_id,
+            from_name,
+            to_pile,
+            to_id,
+            to_name,
+        } => {
+            use ed25519_dalek::SigningKey;
+            use rand::rngs::OsRng;
+            use tribles::prelude::blobschemas::SimpleArchive;
+            use tribles::blob::schemas::UnknownBlob;
+            use tribles::repo;
+            use tribles::repo::pile::Pile;
+            use tribles::repo::Repository;
+            use tribles::value::schemas::hash::Blake3;
+            use tribles::value::schemas::hash::Handle;
+            use tribles::value::Value;
+
+            // Helper to resolve a branch id by hex or by name.
+            fn resolve_branch_id(
+                pile: &mut Pile<DEFAULT_MAX_PILE_SIZE, Blake3>,
+                id_hex: &Option<String>,
+                name_opt: &Option<String>,
+            ) -> anyhow::Result<tribles::id::Id> {
+                use tribles::trible::TribleSet;
+                if let Some(h) = id_hex {
+                    let raw = hex::decode(h)?; let raw: [u8;16] = raw.as_slice().try_into()?; return tribles::id::Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"));
+                }
+                let name = name_opt.clone().ok_or_else(|| anyhow::anyhow!("provide --id or --name"))?;
+                let reader = pile.reader();
+                for r in pile.branches() {
+                    let bid = r?;
+                    if let Some(meta_handle) = pile.head(bid)? {
+                        if let Ok(meta) = reader.get::<TribleSet, SimpleArchive>(meta_handle) {
+                            for t in meta.iter() {
+                                if t.a() == &tribles::metadata::ATTR_NAME {
+                                    let n: tribles::value::Value<tribles::value::schemas::shortstring::ShortString> = *t.v();
+                                    if n.from_value::<String>() == name {
+                                        return Ok(bid);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                anyhow::bail!("branch not found: {name}")
+            }
+
+            // Open source/dest piles
+            let mut src: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&from_pile)?;
+            let mut dst: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&to_pile)?;
+
+            let src_bid = resolve_branch_id(&mut src, &from_id, &from_name)?;
+            let dst_bid = resolve_branch_id(&mut dst, &to_id, &to_name)?;
+
+            // Source head commit
+            let src_head: Value<Handle<Blake3, SimpleArchive>> = src
+                .head(src_bid)?
+                .ok_or_else(|| anyhow::anyhow!("source branch head not found"))?;
+
+            // Copy reachable blobs
+            let stats = repo::copy_reachable(&src.reader(), &mut dst, [src_head.transmute()])
+                .map_err(|e| anyhow::anyhow!("copy_reachable failed: {e}"))?;
+
+            // Attach via a single merge commit
+            let mut repo = Repository::new(dst, SigningKey::generate(&mut OsRng));
+            let mut ws = repo
+                .pull(dst_bid)
+                .map_err(|e| anyhow::anyhow!("failed to open destination branch: {e:?}"))?;
+            ws.merge_commit(src_head)
+                .map_err(|e| anyhow::anyhow!("merge failed: {e:?}"))?;
+
+            while let Some(mut incoming) = repo.push(&mut ws).map_err(|e| anyhow::anyhow!("push failed: {e:?}"))? {
+                incoming
+                    .merge(&mut ws)
+                    .map_err(|e| anyhow::anyhow!("merge conflict: {e:?}"))?;
+                ws = incoming;
+            }
+
+            println!(
+                "merge-import: copied visited={} stored={} and attached source head to destination branch",
+                stats.visited, stats.stored
+            );
         }
     }
     Ok(())
