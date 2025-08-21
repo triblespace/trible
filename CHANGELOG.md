@@ -55,6 +55,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Simplified file ingestion using `anybytes::Bytes::map_file` and removed
   the `memmap2` dependency.
 - Split CLI command groups into modules under `src/cli`.
+- Organized pile and store command implementations into submodules matching the CLI hierarchy.
+- Consolidated pile-only branch commands under the `pile branch` subcommand.
 - Rewrote README with a friendlier tone and clarified command list.
 - Corrected pile file extension in README quick-start example.
 - Deduplicated blob handle parsing across CLI modules.
