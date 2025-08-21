@@ -1,99 +1,101 @@
 use anyhow::Result;
 use clap::Parser;
+use rand::rngs::OsRng;
 use std::convert::TryInto;
 use std::path::PathBuf;
 
 use crate::DEFAULT_MAX_PILE_SIZE;
-use tribles::prelude::BlobStore;
-use tribles::prelude::BlobStoreGet;
-use tribles::prelude::BranchStore;
-use tribles::prelude::Id;
 
 #[derive(Parser)]
-pub enum BranchCommand {
-    /// Push a branch from a pile to a remote object store.
-    Push {
-        /// URL of the target object store
-        url: String,
-        /// Path to the source pile file
-        pile: PathBuf,
-        /// Branch identifier to push (hex encoded)
-        branch: String,
+pub enum Command {
+    /// List all branch identifiers in a pile file.
+    List {
+        /// Path to the pile file to inspect
+        path: PathBuf,
     },
-    /// Pull a branch from a remote object store into a pile.
-    Pull {
-        /// URL of the source object store
-        url: String,
-        /// Path to the destination pile file
+    /// Create a new branch in a pile file.
+    Create {
+        /// Path to the pile file to modify
         pile: PathBuf,
-        /// Branch identifier to pull (hex encoded)
-        branch: String,
+        /// Name of the branch to create
+        name: String,
+    },
+    /// Inspect a branch in a pile and print its id, name, and current head handle.
+    Inspect {
+        /// Path to the pile file to inspect
+        pile: PathBuf,
+        /// Branch identifier to inspect (hex encoded). Mutually exclusive with --name
+        #[arg(long, conflicts_with = "name")]
+        id: Option<String>,
+        /// Branch name to inspect. Mutually exclusive with --id
+        #[arg(long, conflicts_with = "id")]
+        name: Option<String>,
+    },
+    /// Scan the pile for historical branch metadata entries for this branch.
+    /// This lists candidate metadata blobs that reference the branch id.
+    History {
+        /// Path to the pile file to inspect
+        pile: PathBuf,
+        /// Branch identifier to inspect (hex encoded). Mutually exclusive with --name
+        #[arg(long, conflicts_with = "name")]
+        id: Option<String>,
+        /// Branch name to inspect. Mutually exclusive with --id
+        #[arg(long, conflicts_with = "id")]
+        name: Option<String>,
+        /// Maximum results to print
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    /// Import reachable blobs from a source branch into a target pile and
+    /// attach them to the target branch via a single merge commit.
+    MergeImport {
+        /// Path to the source pile file
+        #[arg(long)]
+        from_pile: PathBuf,
+        /// Source branch identifier (hex). Mutually exclusive with --from-name
+        #[arg(long, conflicts_with = "from_name")]
+        from_id: Option<String>,
+        /// Source branch name. Mutually exclusive with --from-id
+        #[arg(long, conflicts_with = "from_id")]
+        from_name: Option<String>,
+
+        /// Path to the destination pile file
+        #[arg(long)]
+        to_pile: PathBuf,
+        /// Destination branch identifier (hex). Mutually exclusive with --to-name
+        #[arg(long, conflicts_with = "to_name")]
+        to_id: Option<String>,
+        /// Destination branch name. Mutually exclusive with --to-id
+        #[arg(long, conflicts_with = "to_id")]
+        to_name: Option<String>,
     },
 }
 
-pub fn run(cmd: BranchCommand) -> Result<()> {
+pub fn run(cmd: Command) -> Result<()> {
     match cmd {
-        BranchCommand::Push { url, pile, branch } => {
-            use tribles::id::Id;
-            use tribles::repo;
-            use tribles::repo::objectstore::ObjectStoreRemote;
+        Command::List { path } => {
             use tribles::repo::pile::Pile;
             use tribles::value::schemas::hash::Blake3;
-            use url::Url;
 
-            let url = Url::parse(&url)?;
-            let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
-            let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
+            let pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&path)?;
 
-            let reader = pile.reader();
-            for r in repo::transfer::<_, _, Blake3, Blake3, tribles::blob::schemas::UnknownBlob>(
-                &reader,
-                &mut remote,
-            ) {
-                r?;
+            for branch in pile.branches() {
+                let id = branch?;
+                println!("{id:X}");
             }
-
-            let raw = hex::decode(branch)?;
-            let raw: [u8; 16] = raw.as_slice().try_into()?;
-            let id = Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?;
-
-            let handle = pile
-                .head(id)?
-                .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
-            let old = remote.head(id)?;
-            remote.update(id, old, handle)?;
         }
-        BranchCommand::Pull { url, pile, branch } => {
-            use tribles::id::Id;
-            use tribles::repo;
-            use tribles::repo::objectstore::ObjectStoreRemote;
+        Command::Create { pile, name } => {
+            use ed25519_dalek::SigningKey;
             use tribles::repo::pile::Pile;
+            use tribles::repo::Repository;
             use tribles::value::schemas::hash::Blake3;
-            use url::Url;
 
-            let url = Url::parse(&url)?;
-            let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
-            let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
-
-            let reader = remote.reader();
-            for r in repo::transfer::<_, _, Blake3, Blake3, tribles::blob::schemas::UnknownBlob>(
-                &reader, &mut pile,
-            ) {
-                r?;
-            }
-
-            let raw = hex::decode(branch)?;
-            let raw: [u8; 16] = raw.as_slice().try_into()?;
-            let id = Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?;
-
-            let handle = remote
-                .head(id)?
-                .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
-            let old = pile.head(id)?;
-            pile.update(id, old, handle)?;
-            pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            let pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
+            let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
+            let ws = repo.branch(&name).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            println!("{:#X}", ws.branch_id());
         }
-        BranchCommand::Inspect { pile, id, name } => {
+        Command::Inspect { pile, id, name } => {
             use tribles::id::Id;
             use tribles::prelude::blobschemas::SimpleArchive;
             use tribles::prelude::valueschemas::Handle;
@@ -106,13 +108,11 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
 
             let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
 
-            // Resolve branch id either from --id or by searching for --name
             let branch_id: Id = if let Some(id_hex) = id {
                 let raw = hex::decode(id_hex)?;
                 let raw: [u8; 16] = raw.as_slice().try_into()?;
                 Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?
             } else if let Some(name) = name {
-                // Enumerate branches and find the one matching name in metadata
                 let reader = pile.reader();
                 let mut found: Option<Id> = None;
                 for r in pile.branches() {
@@ -121,7 +121,6 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
                         let meta: TribleSet = reader
                             .get::<TribleSet, SimpleArchive>(meta_handle)
                             .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-                        // scan for metadata::name
                         for t in meta.iter() {
                             if t.a() == &tribles::metadata::ATTR_NAME {
                                 let n: Value<tribles::value::schemas::shortstring::ShortString> =
@@ -143,13 +142,11 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
                 anyhow::bail!("provide either --id HEX or --name NAME");
             };
 
-            // Load branch metadata blob handle
             let meta_handle = pile
                 .head(branch_id)?
                 .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
             let reader = pile.reader();
             let meta_present = reader.metadata(meta_handle).is_some();
-            // Try to decode metadata, but continue gracefully if it fails
             let (name_val, head_val, head_err): (
                 Option<String>,
                 Option<Value<Handle<Blake3, SimpleArchive>>>,
@@ -159,7 +156,6 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
                     Ok(meta) => {
                         let mut name_val: Option<String> = None;
                         let mut head_val: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
-                        // repo::head attr id from NS! in tribles-rust/src/repo.rs
                         let repo_head_attr: tribles::id::Id =
                             tribles::id_hex!("272FBC56108F336C4D2E17289468C35F");
                         for t in meta.iter() {
@@ -183,15 +179,13 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
             let id_hex = format!("{branch_id:X}");
             let meta_hash: Value<Hash<Blake3>> = Handle::to_hash(meta_handle);
             let meta_hex: String = meta_hash.from_value();
-            // head hash computed later only if we have a decoded head handle
 
             println!("Id:        {id_hex}");
             if let Some(nstr) = name_val.clone() {
                 println!("Name:      {nstr}");
             }
-            println!("Meta:      blake3:{meta_hex}");
             println!(
-                "Meta blob: {}{}",
+                "Meta:      blake3:{meta_hex} [{}]{}",
                 if meta_present { "present" } else { "missing" },
                 head_err
                     .as_deref()
@@ -201,27 +195,30 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
             if let Some(h) = head_val {
                 let head_hash: Value<Hash<Blake3>> = Handle::to_hash(h);
                 let head_hex: String = head_hash.from_value();
-                println!("Head:      blake3:{head_hex}");
                 let present = reader.metadata(h).is_some();
-                println!("Head blob: {}", if present { "present" } else { "missing" });
-            } else {
-                println!("Head:      (unknown: metadata missing or undecodable)");
+                println!(
+                    "Head:      blake3:{head_hex} [{}]",
+                    if present { "present" } else { "missing" }
+                );
             }
         }
-        BranchCommand::History {
+        Command::History {
             pile,
             id,
             name,
             limit,
         } => {
             use tribles::blob::schemas::UnknownBlob;
+            use tribles::id::Id;
+            use tribles::prelude::blobschemas::SimpleArchive;
+            use tribles::prelude::valueschemas::Handle;
+
             use tribles::repo::pile::Pile;
+            use tribles::trible::TribleSet;
             use tribles::value::schemas::hash::Blake3;
-            use tribles::value::schemas::hash::Handle;
             use tribles::value::schemas::hash::Hash;
             use tribles::value::Value;
 
-            // Resolve branch id (reuse Inspect resolution logic)
             let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
             let reader = pile.reader();
 
@@ -230,7 +227,6 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
                 let raw: [u8; 16] = raw.as_slice().try_into()?;
                 Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?
             } else if let Some(name) = name {
-                // Find by name as in Inspect
                 let mut found: Option<Id> = None;
                 for r in pile.branches() {
                     let bid = r?;
@@ -259,23 +255,19 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
                 anyhow::bail!("provide either --id HEX or --name NAME");
             };
 
-            // Attribute ids we care about
             let repo_branch_attr: tribles::id::Id =
                 tribles::id_hex!("8694CC73AF96A5E1C7635C677D1B928A");
             let repo_head_attr: tribles::id::Id =
                 tribles::id_hex!("272FBC56108F336C4D2E17289468C35F");
 
-            // Scan all blobs, filtering to branch metadata sets for this id
             let mut printed = 0usize;
             for (handle, blob) in reader.iter() {
                 let handle: Value<Handle<Blake3, UnknownBlob>> = handle;
-                // Try to read as SimpleArchive -> TribleSet via the reader to benefit from validation
                 let sah: Value<Handle<Blake3, SimpleArchive>> = handle.transmute();
                 let Ok(meta): Result<TribleSet, _> = reader.get::<TribleSet, SimpleArchive>(sah)
                 else {
                     continue;
                 };
-                // Check if this set declares repo::branch = branch_id
                 let mut is_meta_for_branch = false;
                 let mut head_val: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
                 for t in meta.iter() {
@@ -315,7 +307,7 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
                 println!("No metadata entries found for this branch in pile blobs.");
             }
         }
-        BranchCommand::MergeImport {
+        Command::MergeImport {
             from_pile,
             from_id,
             from_name,
@@ -324,8 +316,7 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
             to_name,
         } => {
             use ed25519_dalek::SigningKey;
-            use rand::rngs::OsRng;
-
+            use tribles::blob::schemas::UnknownBlob;
             use tribles::prelude::blobschemas::SimpleArchive;
             use tribles::repo;
             use tribles::repo::pile::Pile;
@@ -334,7 +325,6 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
             use tribles::value::schemas::hash::Handle;
             use tribles::value::Value;
 
-            // Helper to resolve a branch id by hex or by name.
             fn resolve_branch_id(
                 pile: &mut Pile<DEFAULT_MAX_PILE_SIZE, Blake3>,
                 id_hex: &Option<String>,
@@ -370,23 +360,19 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
                 anyhow::bail!("branch not found: {name}")
             }
 
-            // Open source/dest piles
             let mut src: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&from_pile)?;
             let mut dst: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&to_pile)?;
 
             let src_bid = resolve_branch_id(&mut src, &from_id, &from_name)?;
             let dst_bid = resolve_branch_id(&mut dst, &to_id, &to_name)?;
 
-            // Source head commit
             let src_head: Value<Handle<Blake3, SimpleArchive>> = src
                 .head(src_bid)?
                 .ok_or_else(|| anyhow::anyhow!("source branch head not found"))?;
 
-            // Copy reachable blobs
             let stats = repo::copy_reachable(&src.reader(), &mut dst, [src_head.transmute()])
                 .map_err(|e| anyhow::anyhow!("copy_reachable failed: {e}"))?;
 
-            // Attach via a single merge commit
             let mut repo = Repository::new(dst, SigningKey::generate(&mut OsRng));
             let mut ws = repo
                 .pull(dst_bid)
