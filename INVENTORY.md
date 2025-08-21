@@ -13,3 +13,4 @@
 ## Discovered Issues
 - Object store operations rely on an async runtime; consider synchronous alternatives.
 - Preflight script and test suite take an unusually long time to run; investigate ways to reduce build and execution time.
+- Address remaining compiler warnings from unused imports and variables.

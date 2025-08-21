@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use crate::DEFAULT_MAX_PILE_SIZE;
 
+use tribles::prelude::{BlobStore, BlobStoreGet, BranchStore};
+
 #[derive(Parser)]
 pub enum Command {
     /// List all branch identifiers in a pile file.

@@ -64,6 +64,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   ingestion.
 - Split CLI integration tests into smaller modules for readability.
 - `pile create` now creates parent directories if they do not exist.
+- Updated to latest `tribles` crate and imported required store traits.
 ### Removed
 - Completed work entries have been trimmed from `INVENTORY.md` now that they are
   tracked here.
