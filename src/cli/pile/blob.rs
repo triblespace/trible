@@ -51,6 +51,7 @@ pub fn run(cmd: Command) -> Result<()> {
             use std::time::UNIX_EPOCH;
 
             use tribles::blob::schemas::UnknownBlob;
+            use tribles::prelude::BlobStore;
             use tribles::prelude::BlobStoreList;
             use tribles::repo::pile::Pile;
             use tribles::value::schemas::hash::Blake3;
@@ -103,6 +104,7 @@ pub fn run(cmd: Command) -> Result<()> {
 
             use tribles::blob::schemas::UnknownBlob;
             use tribles::blob::Bytes;
+            use tribles::prelude::BlobStore;
             use tribles::prelude::BlobStoreGet;
             use tribles::repo::pile::Pile;
             use tribles::value::schemas::hash::Blake3;
@@ -125,6 +127,7 @@ pub fn run(cmd: Command) -> Result<()> {
 
             use tribles::blob::schemas::UnknownBlob;
             use tribles::blob::Blob;
+            use tribles::prelude::BlobStore;
             use tribles::prelude::BlobStoreGet;
             use tribles::repo::pile::BlobMetadata;
             use tribles::repo::pile::Pile;

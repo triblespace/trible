@@ -95,6 +95,7 @@ pub fn run(cmd: Command) -> Result<()> {
 
             use tribles::blob::schemas::UnknownBlob;
             use tribles::blob::Bytes;
+            use tribles::prelude::BlobStore;
             use tribles::prelude::BlobStoreGet;
             use tribles::repo::objectstore::ObjectStoreRemote;
             use tribles::value::schemas::hash::Blake3;
@@ -118,6 +119,7 @@ pub fn run(cmd: Command) -> Result<()> {
             use object_store::ObjectStore;
             use tribles::blob::schemas::UnknownBlob;
             use tribles::blob::Blob;
+            use tribles::prelude::BlobStore;
             use tribles::prelude::BlobStoreGet;
             use tribles::repo::objectstore::ObjectStoreRemote;
             use tribles::value::schemas::hash::Blake3;

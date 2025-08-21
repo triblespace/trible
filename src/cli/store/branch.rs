@@ -13,6 +13,7 @@ pub enum Command {
 pub fn run(cmd: Command) -> Result<()> {
     match cmd {
         Command::List { url } => {
+            use tribles::prelude::BranchStore;
             use tribles::repo::objectstore::ObjectStoreRemote;
             use tribles::value::schemas::hash::Blake3;
             use url::Url;

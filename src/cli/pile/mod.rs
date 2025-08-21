@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use crate::DEFAULT_MAX_PILE_SIZE;
 
+use tribles::prelude::{BlobStore, BlobStoreGet, BranchStore};
+
 pub mod blob;
 pub mod branch;
 
@@ -247,9 +249,10 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                         anyhow::bail!("diagnostics reported issues");
                     }
                 }
-                Err(OpenError::Missing) => {
+                Err(OpenError::IoError(err)) if err.kind() == std::io::ErrorKind::NotFound => {
                     anyhow::bail!("pile not found");
                 }
+                Err(e) => return Err(e.into()),
             }
             Ok(())
         }
