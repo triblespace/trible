@@ -258,7 +258,7 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
             } else {
                 println!("Head:      (unknown: metadata missing or undecodable)");
             }
-        }         
+        }
         BranchCommand::History {
             pile,
             id,
@@ -376,8 +376,8 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
         } => {
             use ed25519_dalek::SigningKey;
             use rand::rngs::OsRng;
+
             use tribles::prelude::blobschemas::SimpleArchive;
-            use tribles::blob::schemas::UnknownBlob;
             use tribles::repo;
             use tribles::repo::pile::Pile;
             use tribles::repo::Repository;
@@ -393,9 +393,13 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
             ) -> anyhow::Result<tribles::id::Id> {
                 use tribles::trible::TribleSet;
                 if let Some(h) = id_hex {
-                    let raw = hex::decode(h)?; let raw: [u8;16] = raw.as_slice().try_into()?; return tribles::id::Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"));
+                    let raw = hex::decode(h)?;
+                    let raw: [u8; 16] = raw.as_slice().try_into()?;
+                    return tribles::id::Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"));
                 }
-                let name = name_opt.clone().ok_or_else(|| anyhow::anyhow!("provide --id or --name"))?;
+                let name = name_opt
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("provide --id or --name"))?;
                 let reader = pile.reader();
                 for r in pile.branches() {
                     let bid = r?;
@@ -403,7 +407,9 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
                         if let Ok(meta) = reader.get::<TribleSet, SimpleArchive>(meta_handle) {
                             for t in meta.iter() {
                                 if t.a() == &tribles::metadata::ATTR_NAME {
-                                    let n: tribles::value::Value<tribles::value::schemas::shortstring::ShortString> = *t.v();
+                                    let n: tribles::value::Value<
+                                        tribles::value::schemas::shortstring::ShortString,
+                                    > = *t.v();
                                     if n.from_value::<String>() == name {
                                         return Ok(bid);
                                     }
@@ -439,7 +445,10 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
             ws.merge_commit(src_head)
                 .map_err(|e| anyhow::anyhow!("merge failed: {e:?}"))?;
 
-            while let Some(mut incoming) = repo.push(&mut ws).map_err(|e| anyhow::anyhow!("push failed: {e:?}"))? {
+            while let Some(mut incoming) = repo
+                .push(&mut ws)
+                .map_err(|e| anyhow::anyhow!("push failed: {e:?}"))?
+            {
                 incoming
                     .merge(&mut ws)
                     .map_err(|e| anyhow::anyhow!("merge conflict: {e:?}"))?;
