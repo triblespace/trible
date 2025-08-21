@@ -9,14 +9,9 @@ use std::io;
 pub const DEFAULT_MAX_PILE_SIZE: usize = 1 << 44; // 16 TiB
 
 mod cli;
-
-pub use cli::branch::BranchCommand;
-pub use cli::pile::BlobCommand;
-pub use cli::pile::PileBranchCommand;
-pub use cli::pile::PileCommand;
-pub use cli::store::StoreBlobCommand;
-pub use cli::store::StoreBranchCommand;
-pub use cli::store::StoreCommand;
+use cli::branch::BranchCommand;
+use cli::pile::PileCommand;
+use cli::store::StoreCommand;
 
 #[derive(Parser)]
 /// A knowledge graph and meta file system for object stores.
