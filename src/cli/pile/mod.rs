@@ -3,9 +3,11 @@ use clap::Parser;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::DEFAULT_MAX_PILE_SIZE;
+// DEFAULT_MAX_PILE_SIZE no longer required for the updated Pile API
 
-use tribles::prelude::{BlobStore, BlobStoreGet, BranchStore};
+use tribles::prelude::BlobStore;
+use tribles::prelude::BlobStoreGet;
+use tribles::prelude::BranchStore;
 
 pub mod blob;
 pub mod branch;
@@ -52,33 +54,45 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                 fs::create_dir_all(parent)?;
             }
 
-            let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&path)?;
+            let mut pile: Pile<Blake3> = Pile::open(&path)?;
             pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             Ok(())
         }
         PileCommand::Diagnose { pile, fail_fast } => {
             use tribles::prelude::blobschemas::SimpleArchive;
 
-            use tribles::repo::pile::OpenError;
             use tribles::repo::pile::Pile;
+            use tribles::repo::pile::ReadError;
             use tribles::trible::TribleSet;
             use tribles::value::schemas::hash::Blake3;
             use tribles::value::schemas::hash::Handle;
             use tribles::value::schemas::hash::Hash;
             use tribles::value::Value;
 
-            match Pile::<DEFAULT_MAX_PILE_SIZE, Blake3>::try_open(&pile) {
+            match Pile::<Blake3>::open(&pile) {
                 Ok(mut pile) => {
                     let mut any_error = false;
-                    let reader = pile.reader();
+                    let reader = pile
+                        .reader()
+                        .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
                     let mut invalid = 0usize;
                     let mut total = 0usize;
-                    for (handle, blob) in reader.iter() {
-                        total += 1;
-                        let expected: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
-                        let computed = Hash::<Blake3>::digest(&blob.bytes);
-                        if expected != computed {
-                            invalid += 1;
+                    for item in reader.iter() {
+                        match item {
+                            Ok((handle, blob)) => {
+                                total += 1;
+                                let expected: tribles::value::Value<Hash<Blake3>> =
+                                    Handle::to_hash(handle);
+                                let computed = Hash::<Blake3>::digest(&blob.bytes);
+                                if expected != computed {
+                                    invalid += 1;
+                                }
+                            }
+                            Err(_) => {
+                                // Treat iterator errors (validation, missing index) as invalid blobs.
+                                total += 1;
+                                invalid += 1;
+                            }
                         }
                     }
 
@@ -157,6 +171,8 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                         (count, None)
                     }
 
+                    // Ensure in-memory indices are loaded before enumerating branches.
+                    pile.refresh()?;
                     for r in pile.branches() {
                         let bid = r?;
                         let meta_handle_opt = pile.head(bid)?;
@@ -249,7 +265,7 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                         anyhow::bail!("diagnostics reported issues");
                     }
                 }
-                Err(OpenError::IoError(err)) if err.kind() == std::io::ErrorKind::NotFound => {
+                Err(ReadError::IoError(err)) if err.kind() == std::io::ErrorKind::NotFound => {
                     anyhow::bail!("pile not found");
                 }
                 Err(e) => return Err(e.into()),

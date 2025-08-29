@@ -4,9 +4,11 @@ use rand::rngs::OsRng;
 use std::convert::TryInto;
 use std::path::PathBuf;
 
-use crate::DEFAULT_MAX_PILE_SIZE;
+// DEFAULT_MAX_PILE_SIZE removed; the new Pile API no longer uses a size const generic
 
-use tribles::prelude::{BlobStore, BlobStoreGet, BranchStore};
+use tribles::prelude::BlobStore;
+use tribles::prelude::BlobStoreGet;
+use tribles::prelude::BranchStore;
 
 #[derive(Parser)]
 pub enum Command {
@@ -79,7 +81,9 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::repo::pile::Pile;
             use tribles::value::schemas::hash::Blake3;
 
-            let pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&path)?;
+            let mut pile: Pile<Blake3> = Pile::open(&path)?;
+            // Refresh in-memory indices from the file so branches() reflects current state.
+            pile.refresh()?;
 
             for branch in pile.branches() {
                 let id = branch?;
@@ -92,7 +96,7 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::repo::Repository;
             use tribles::value::schemas::hash::Blake3;
 
-            let pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
+            let pile: Pile<Blake3> = Pile::open(&pile)?;
             let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
             let ws = repo.branch(&name).map_err(|e| anyhow::anyhow!("{e:?}"))?;
             println!("{:#X}", ws.branch_id());
@@ -108,14 +112,16 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::value::schemas::hash::Hash;
             use tribles::value::Value;
 
-            let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
+            let mut pile: Pile<Blake3> = Pile::open(&pile)?;
 
             let branch_id: Id = if let Some(id_hex) = id {
                 let raw = hex::decode(id_hex)?;
                 let raw: [u8; 16] = raw.as_slice().try_into()?;
                 Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?
             } else if let Some(name) = name {
-                let reader = pile.reader();
+                let reader = pile
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
                 let mut found: Option<Id> = None;
                 for r in pile.branches() {
                     let bid = r?;
@@ -147,7 +153,9 @@ pub fn run(cmd: Command) -> Result<()> {
             let meta_handle = pile
                 .head(branch_id)?
                 .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
-            let reader = pile.reader();
+            let reader = pile
+                .reader()
+                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
             let meta_present = reader.metadata(meta_handle).is_some();
             let (name_val, head_val, head_err): (
                 Option<String>,
@@ -221,8 +229,12 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::value::schemas::hash::Hash;
             use tribles::value::Value;
 
-            let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
-            let reader = pile.reader();
+            let mut pile: Pile<Blake3> = Pile::open(&pile)?;
+            // Ensure indices are loaded before scanning
+            pile.refresh()?;
+            let reader = pile
+                .reader()
+                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
 
             let branch_id: Id = if let Some(id_hex) = id {
                 let raw = hex::decode(id_hex)?;
@@ -263,7 +275,8 @@ pub fn run(cmd: Command) -> Result<()> {
                 tribles::id_hex!("272FBC56108F336C4D2E17289468C35F");
 
             let mut printed = 0usize;
-            for (handle, blob) in reader.iter() {
+            for item in reader.iter() {
+                let (handle, blob) = item.expect("infallible iteration");
                 let handle: Value<Handle<Blake3, UnknownBlob>> = handle;
                 let sah: Value<Handle<Blake3, SimpleArchive>> = handle.transmute();
                 let Ok(meta): Result<TribleSet, _> = reader.get::<TribleSet, SimpleArchive>(sah)
@@ -318,7 +331,7 @@ pub fn run(cmd: Command) -> Result<()> {
             to_name,
         } => {
             use ed25519_dalek::SigningKey;
-            use tribles::blob::schemas::UnknownBlob;
+
             use tribles::prelude::blobschemas::SimpleArchive;
             use tribles::repo;
             use tribles::repo::pile::Pile;
@@ -328,7 +341,7 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::value::Value;
 
             fn resolve_branch_id(
-                pile: &mut Pile<DEFAULT_MAX_PILE_SIZE, Blake3>,
+                pile: &mut Pile<Blake3>,
                 id_hex: &Option<String>,
                 name_opt: &Option<String>,
             ) -> anyhow::Result<tribles::id::Id> {
@@ -341,7 +354,9 @@ pub fn run(cmd: Command) -> Result<()> {
                 let name = name_opt
                     .clone()
                     .ok_or_else(|| anyhow::anyhow!("provide --id or --name"))?;
-                let reader = pile.reader();
+                let reader = pile
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
                 for r in pile.branches() {
                     let bid = r?;
                     if let Some(meta_handle) = pile.head(bid)? {
@@ -362,8 +377,8 @@ pub fn run(cmd: Command) -> Result<()> {
                 anyhow::bail!("branch not found: {name}")
             }
 
-            let mut src: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&from_pile)?;
-            let mut dst: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&to_pile)?;
+            let mut src: Pile<Blake3> = Pile::open(&from_pile)?;
+            let mut dst: Pile<Blake3> = Pile::open(&to_pile)?;
 
             let src_bid = resolve_branch_id(&mut src, &from_id, &from_name)?;
             let dst_bid = resolve_branch_id(&mut dst, &to_id, &to_name)?;
@@ -372,7 +387,10 @@ pub fn run(cmd: Command) -> Result<()> {
                 .head(src_bid)?
                 .ok_or_else(|| anyhow::anyhow!("source branch head not found"))?;
 
-            let stats = repo::copy_reachable(&src.reader(), &mut dst, [src_head.transmute()])
+            let src_reader = src
+                .reader()
+                .map_err(|e| anyhow::anyhow!("src pile reader error: {e:?}"))?;
+            let stats = repo::copy_reachable(&src_reader, &mut dst, [src_head.transmute()])
                 .map_err(|e| anyhow::anyhow!("copy_reachable failed: {e}"))?;
 
             let mut repo = Repository::new(dst, SigningKey::generate(&mut OsRng));

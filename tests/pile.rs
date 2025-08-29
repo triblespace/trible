@@ -8,15 +8,15 @@ use tribles::prelude::BlobStoreList;
 use tribles::prelude::BranchStore;
 use tribles::repo::pile::Pile;
 use tribles::repo::Repository;
+use tribles::value::schemas::hash::Blake3;
 
 #[test]
 fn list_branches_outputs_branch_id() {
-    const MAX_SIZE: usize = 1 << 20; // small pile for tests
     let dir = tempdir().unwrap();
     let path = dir.path().join("test.pile");
 
     {
-        let pile: Pile<MAX_SIZE> = Pile::open(&path).unwrap();
+        let pile: Pile<Blake3> = Pile::open(&path).unwrap();
         let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
         repo.branch("main").expect("create branch");
         // drop repo to flush changes
@@ -42,8 +42,9 @@ fn create_initializes_empty_pile() {
         .success()
         .stdout(predicate::str::is_empty());
 
-    const MAX_SIZE: usize = 1 << 20; // small pile for tests
-    let pile: Pile<MAX_SIZE> = Pile::open(&path).unwrap();
+    let mut pile: Pile<Blake3> = Pile::open(&path).unwrap();
+    // Explicitly refresh after open to populate in-memory indices.
+    pile.refresh().unwrap();
     assert!(pile.branches().next().is_none());
 }
 
@@ -90,9 +91,8 @@ fn put_ingests_file() {
         .success()
         .stdout(predicate::str::is_match(pattern).unwrap());
 
-    const MAX_SIZE: usize = 1 << 20; // small pile for tests
-    let mut pile: Pile<MAX_SIZE> = Pile::open(&pile_path).unwrap();
-    let reader = pile.reader();
+    let mut pile: Pile<Blake3> = Pile::open(&pile_path).unwrap();
+    let reader = pile.reader().unwrap();
     assert!(reader.blobs().next().is_some());
 }
 
@@ -275,7 +275,6 @@ fn inspect_outputs_tribles() {
     use tribles::prelude::*;
     use tribles::value::schemas::hash::Handle;
 
-    const MAX_SIZE: usize = 1 << 20;
     let dir = tempdir().unwrap();
     let pile_path = dir.path().join("inspect.pile");
 
@@ -283,7 +282,7 @@ fn inspect_outputs_tribles() {
     let blob = dataset.to_blob();
 
     {
-        let mut pile: Pile<MAX_SIZE> = Pile::open(&pile_path).unwrap();
+        let mut pile: Pile<Blake3> = Pile::open(&pile_path).unwrap();
         let handle = pile.put::<SimpleArchive, _>(blob).unwrap();
         pile.flush().unwrap();
 

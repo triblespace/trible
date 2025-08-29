@@ -19,7 +19,9 @@ pub fn run(cmd: Command) -> Result<()> {
             use url::Url;
 
             let url = Url::parse(&url)?;
-            let remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
+            let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
+            // Ensure remote listing is up-to-date when needed; callers can
+            // refresh explicitly if they prefer.
             for branch in remote.branches() {
                 let id = branch?;
                 println!("{id:X}");

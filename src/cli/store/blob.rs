@@ -106,7 +106,9 @@ pub fn run(cmd: Command) -> Result<()> {
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let hash_val = parse_blob_handle(&handle)?;
             let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash_val.into();
-            let reader = remote.reader();
+            let reader = remote
+                .reader()
+                .map_err(|e| anyhow::anyhow!("remote reader error: {e:?}"))?;
             let bytes: Bytes = reader.get(handle_val)?;
             let mut file = File::create(&output)?;
             file.write_all(&bytes)?;
@@ -131,7 +133,9 @@ pub fn run(cmd: Command) -> Result<()> {
             let hash_val = parse_blob_handle(&handle)?;
             let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash_val.into();
             let handle_str: String = hash_val.clone().from_value();
-            let reader = remote.reader();
+            let reader = remote
+                .reader()
+                .map_err(|e| anyhow::anyhow!("remote reader error: {e:?}"))?;
             let blob: Blob<UnknownBlob> = reader.get(handle_val)?;
 
             let (store, base) = parse_url(&url)?;

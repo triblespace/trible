@@ -5,6 +5,7 @@ use rand::rngs::OsRng;
 use tempfile::tempdir;
 use tribles::repo::pile::Pile;
 use tribles::repo::Repository;
+use tribles::value::schemas::hash::Blake3;
 
 #[test]
 fn store_blob_list_outputs_file() {
@@ -166,7 +167,7 @@ fn store_branch_list_outputs_id() {
 
 #[test]
 fn branch_push_pull_transfers_branch() {
-    const MAX_SIZE: usize = 1 << 20;
+    // const MAX_SIZE removed; new Pile API accepts a hash protocol type parameter
     let dir = tempdir().unwrap();
     let local = dir.path().join("local.pile");
     let remote_dir = dir.path().join("remote");
@@ -175,7 +176,7 @@ fn branch_push_pull_transfers_branch() {
     let url = format!("file://{}", remote_dir.display());
 
     let branch_id = {
-        let pile: Pile<MAX_SIZE> = Pile::open(&local).unwrap();
+        let pile: Pile<Blake3> = Pile::open(&local).unwrap();
         let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
         let ws = repo.branch("main").unwrap();
         ws.branch_id()

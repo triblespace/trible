@@ -3,7 +3,7 @@ use clap::Parser;
 use std::fs::File;
 use std::path::PathBuf;
 
-use crate::DEFAULT_MAX_PILE_SIZE;
+// DEFAULT_MAX_PILE_SIZE removed; the new Pile API no longer uses a size const generic
 
 use crate::cli::util::parse_blob_handle;
 
@@ -58,8 +58,10 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::value::schemas::hash::Handle;
             use tribles::value::schemas::hash::Hash;
 
-            let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&path)?;
-            let reader = pile.reader();
+            let mut pile: Pile<Blake3> = Pile::open(&path)?;
+            let reader = pile
+                .reader()
+                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
             for handle in reader.blobs() {
                 let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = handle?;
                 let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
@@ -86,7 +88,7 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::value::schemas::hash::Handle;
             use tribles::value::schemas::hash::Hash;
 
-            let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
+            let mut pile: Pile<Blake3> = Pile::open(&pile)?;
             let file_handle = File::open(&file)?;
             let bytes = unsafe { Bytes::map_file(&file_handle)? };
             let handle = pile.put::<UnknownBlob, _>(bytes)?;
@@ -110,10 +112,12 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::value::schemas::hash::Blake3;
             use tribles::value::schemas::hash::Handle;
 
-            let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
+            let mut pile: Pile<Blake3> = Pile::open(&pile)?;
             let hash_val = parse_blob_handle(&handle)?;
             let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash_val.into();
-            let reader = pile.reader();
+            let reader = pile
+                .reader()
+                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
             let bytes: Bytes = reader.get(handle_val)?;
             let mut file = File::create(&output)?;
             file.write_all(&bytes)?;
@@ -134,10 +138,12 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::value::schemas::hash::Blake3;
             use tribles::value::schemas::hash::Handle;
 
-            let mut pile: Pile<DEFAULT_MAX_PILE_SIZE, Blake3> = Pile::open(&pile)?;
+            let mut pile: Pile<Blake3> = Pile::open(&pile)?;
             let hash_val = parse_blob_handle(&handle)?;
             let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash_val.into();
-            let reader = pile.reader();
+            let reader = pile
+                .reader()
+                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
             let blob: Blob<UnknownBlob> = reader.get(handle_val)?;
             let metadata: BlobMetadata = reader
                 .metadata(handle_val)
