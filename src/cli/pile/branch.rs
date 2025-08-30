@@ -82,13 +82,18 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::value::schemas::hash::Blake3;
 
             let mut pile: Pile<Blake3> = Pile::open(&path)?;
-            // Refresh in-memory indices from the file so branches() reflects current state.
-            pile.refresh()?;
+            let res = (|| -> Result<(), anyhow::Error> {
+                // Refresh in-memory indices from the file so branches() reflects current state.
+                pile.refresh()?;
 
-            for branch in pile.branches() {
-                let id = branch?;
-                println!("{id:X}");
-            }
+                for branch in pile.branches() {
+                    let id = branch?;
+                    println!("{id:X}");
+                }
+                Ok(())
+            })();
+            let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+            res.and(close_res)?;
         }
         Command::Create { pile, name } => {
             use ed25519_dalek::SigningKey;
@@ -100,6 +105,10 @@ pub fn run(cmd: Command) -> Result<()> {
             let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
             let ws = repo.branch(&name).map_err(|e| anyhow::anyhow!("{e:?}"))?;
             println!("{:#X}", ws.branch_id());
+            // Ensure the underlying pile is closed and errors are surfaced.
+            repo.into_storage()
+                .close()
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
         }
         Command::Inspect { pile, id, name } => {
             use tribles::id::Id;
@@ -113,104 +122,110 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::value::Value;
 
             let mut pile: Pile<Blake3> = Pile::open(&pile)?;
+            let res = (|| -> Result<(), anyhow::Error> {
+                let branch_id: Id = if let Some(id_hex) = id {
+                    let raw = hex::decode(id_hex)?;
+                    let raw: [u8; 16] = raw.as_slice().try_into()?;
+                    Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?
+                } else if let Some(name) = name {
+                    let reader = pile
+                        .reader()
+                        .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
+                    let mut found: Option<Id> = None;
+                    for r in pile.branches() {
+                        let bid = r?;
+                        if let Some(meta_handle) = pile.head(bid)? {
+                            let meta: TribleSet = reader
+                                .get::<TribleSet, SimpleArchive>(meta_handle)
+                                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                            for t in meta.iter() {
+                                if t.a() == &tribles::metadata::ATTR_NAME {
+                                    let n: Value<
+                                        tribles::value::schemas::shortstring::ShortString,
+                                    > = *t.v();
+                                    let nstr: String = n.from_value();
+                                    if nstr == name {
+                                        found = Some(bid);
+                                        break;
+                                    }
+                                }
+                            }
+                            if found.is_some() {
+                                break;
+                            }
+                        }
+                    }
+                    found.ok_or_else(|| anyhow::anyhow!("branch named not found"))?
+                } else {
+                    anyhow::bail!("provide either --id HEX or --name NAME");
+                };
 
-            let branch_id: Id = if let Some(id_hex) = id {
-                let raw = hex::decode(id_hex)?;
-                let raw: [u8; 16] = raw.as_slice().try_into()?;
-                Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?
-            } else if let Some(name) = name {
+                let meta_handle = pile
+                    .head(branch_id)?
+                    .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
                 let reader = pile
                     .reader()
                     .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
-                let mut found: Option<Id> = None;
-                for r in pile.branches() {
-                    let bid = r?;
-                    if let Some(meta_handle) = pile.head(bid)? {
-                        let meta: TribleSet = reader
-                            .get::<TribleSet, SimpleArchive>(meta_handle)
-                            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-                        for t in meta.iter() {
-                            if t.a() == &tribles::metadata::ATTR_NAME {
-                                let n: Value<tribles::value::schemas::shortstring::ShortString> =
-                                    *t.v();
-                                let nstr: String = n.from_value();
-                                if nstr == name {
-                                    found = Some(bid);
-                                    break;
+                let meta_present = reader.metadata(meta_handle).is_some();
+                let (name_val, head_val, head_err): (
+                    Option<String>,
+                    Option<Value<Handle<Blake3, SimpleArchive>>>,
+                    Option<String>,
+                ) = if meta_present {
+                    match reader.get::<TribleSet, SimpleArchive>(meta_handle) {
+                        Ok(meta) => {
+                            let mut name_val: Option<String> = None;
+                            let mut head_val: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
+                            let repo_head_attr: tribles::id::Id =
+                                tribles::id_hex!("272FBC56108F336C4D2E17289468C35F");
+                            for t in meta.iter() {
+                                if t.a() == &tribles::metadata::ATTR_NAME {
+                                    let n: Value<
+                                        tribles::value::schemas::shortstring::ShortString,
+                                    > = *t.v();
+                                    name_val = Some(n.from_value());
+                                } else if t.a() == &repo_head_attr {
+                                    let h = *t.v::<Handle<Blake3, SimpleArchive>>();
+                                    head_val = Some(h);
                                 }
                             }
+                            (name_val, head_val, None)
                         }
-                        if found.is_some() {
-                            break;
-                        }
+                        Err(e) => (None, None, Some(format!("decode failed: {e:?}"))),
                     }
+                } else {
+                    (None, None, None)
+                };
+
+                let id_hex = format!("{branch_id:X}");
+                let meta_hash: Value<Hash<Blake3>> = Handle::to_hash(meta_handle);
+                let meta_hex: String = meta_hash.from_value();
+
+                println!("Id:        {id_hex}");
+                if let Some(nstr) = name_val.clone() {
+                    println!("Name:      {nstr}");
                 }
-                found.ok_or_else(|| anyhow::anyhow!("branch named not found"))?
-            } else {
-                anyhow::bail!("provide either --id HEX or --name NAME");
-            };
-
-            let meta_handle = pile
-                .head(branch_id)?
-                .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
-            let reader = pile
-                .reader()
-                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
-            let meta_present = reader.metadata(meta_handle).is_some();
-            let (name_val, head_val, head_err): (
-                Option<String>,
-                Option<Value<Handle<Blake3, SimpleArchive>>>,
-                Option<String>,
-            ) = if meta_present {
-                match reader.get::<TribleSet, SimpleArchive>(meta_handle) {
-                    Ok(meta) => {
-                        let mut name_val: Option<String> = None;
-                        let mut head_val: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
-                        let repo_head_attr: tribles::id::Id =
-                            tribles::id_hex!("272FBC56108F336C4D2E17289468C35F");
-                        for t in meta.iter() {
-                            if t.a() == &tribles::metadata::ATTR_NAME {
-                                let n: Value<tribles::value::schemas::shortstring::ShortString> =
-                                    *t.v();
-                                name_val = Some(n.from_value());
-                            } else if t.a() == &repo_head_attr {
-                                let h = *t.v::<Handle<Blake3, SimpleArchive>>();
-                                head_val = Some(h);
-                            }
-                        }
-                        (name_val, head_val, None)
-                    }
-                    Err(e) => (None, None, Some(format!("decode failed: {e:?}"))),
-                }
-            } else {
-                (None, None, None)
-            };
-
-            let id_hex = format!("{branch_id:X}");
-            let meta_hash: Value<Hash<Blake3>> = Handle::to_hash(meta_handle);
-            let meta_hex: String = meta_hash.from_value();
-
-            println!("Id:        {id_hex}");
-            if let Some(nstr) = name_val.clone() {
-                println!("Name:      {nstr}");
-            }
-            println!(
-                "Meta:      blake3:{meta_hex} [{}]{}",
-                if meta_present { "present" } else { "missing" },
-                head_err
-                    .as_deref()
-                    .map(|e| format!(" ({e})"))
-                    .unwrap_or_default()
-            );
-            if let Some(h) = head_val {
-                let head_hash: Value<Hash<Blake3>> = Handle::to_hash(h);
-                let head_hex: String = head_hash.from_value();
-                let present = reader.metadata(h).is_some();
                 println!(
-                    "Head:      blake3:{head_hex} [{}]",
-                    if present { "present" } else { "missing" }
+                    "Meta:      blake3:{meta_hex} [{}]{}",
+                    if meta_present { "present" } else { "missing" },
+                    head_err
+                        .as_deref()
+                        .map(|e| format!(" ({e})"))
+                        .unwrap_or_default()
                 );
-            }
+                if let Some(h) = head_val {
+                    let head_hash: Value<Hash<Blake3>> = Handle::to_hash(h);
+                    let head_hex: String = head_hash.from_value();
+                    let present = reader.metadata(h).is_some();
+                    println!(
+                        "Head:      blake3:{head_hex} [{}]",
+                        if present { "present" } else { "missing" }
+                    );
+                }
+                Ok(())
+            })();
+            let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+            res.and(close_res)?;
         }
         Command::History {
             pile,
@@ -230,97 +245,104 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::value::Value;
 
             let mut pile: Pile<Blake3> = Pile::open(&pile)?;
-            // Ensure indices are loaded before scanning
-            pile.refresh()?;
-            let reader = pile
-                .reader()
-                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
+            let res = (|| -> Result<(), anyhow::Error> {
+                // Ensure indices are loaded before scanning
+                pile.refresh()?;
+                let reader = pile
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
 
-            let branch_id: Id = if let Some(id_hex) = id {
-                let raw = hex::decode(id_hex)?;
-                let raw: [u8; 16] = raw.as_slice().try_into()?;
-                Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?
-            } else if let Some(name) = name {
-                let mut found: Option<Id> = None;
-                for r in pile.branches() {
-                    let bid = r?;
-                    if let Some(meta_handle) = pile.head(bid)? {
-                        let meta: TribleSet = reader
-                            .get::<TribleSet, SimpleArchive>(meta_handle)
-                            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-                        for t in meta.iter() {
-                            if t.a() == &tribles::metadata::ATTR_NAME {
-                                let n: Value<tribles::value::schemas::shortstring::ShortString> =
-                                    *t.v();
-                                let nstr: String = n.from_value();
-                                if nstr == name {
-                                    found = Some(bid);
-                                    break;
+                let branch_id: Id = if let Some(id_hex) = id {
+                    let raw = hex::decode(id_hex)?;
+                    let raw: [u8; 16] = raw.as_slice().try_into()?;
+                    Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?
+                } else if let Some(name) = name {
+                    let mut found: Option<Id> = None;
+                    for r in pile.branches() {
+                        let bid = r?;
+                        if let Some(meta_handle) = pile.head(bid)? {
+                            let meta: TribleSet = reader
+                                .get::<TribleSet, SimpleArchive>(meta_handle)
+                                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                            for t in meta.iter() {
+                                if t.a() == &tribles::metadata::ATTR_NAME {
+                                    let n: Value<
+                                        tribles::value::schemas::shortstring::ShortString,
+                                    > = *t.v();
+                                    let nstr: String = n.from_value();
+                                    if nstr == name {
+                                        found = Some(bid);
+                                        break;
+                                    }
                                 }
                             }
-                        }
-                        if found.is_some() {
-                            break;
-                        }
-                    }
-                }
-                found.ok_or_else(|| anyhow::anyhow!("branch named not found"))?
-            } else {
-                anyhow::bail!("provide either --id HEX or --name NAME");
-            };
-
-            let repo_branch_attr: tribles::id::Id =
-                tribles::id_hex!("8694CC73AF96A5E1C7635C677D1B928A");
-            let repo_head_attr: tribles::id::Id =
-                tribles::id_hex!("272FBC56108F336C4D2E17289468C35F");
-
-            let mut printed = 0usize;
-            for item in reader.iter() {
-                let (handle, blob) = item.expect("infallible iteration");
-                let handle: Value<Handle<Blake3, UnknownBlob>> = handle;
-                let sah: Value<Handle<Blake3, SimpleArchive>> = handle.transmute();
-                let Ok(meta): Result<TribleSet, _> = reader.get::<TribleSet, SimpleArchive>(sah)
-                else {
-                    continue;
-                };
-                let mut is_meta_for_branch = false;
-                let mut head_val: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
-                for t in meta.iter() {
-                    if t.a() == &repo_branch_attr {
-                        let v: Value<tribles::prelude::valueschemas::GenId> = *t.v();
-                        if let Ok(id) = v.try_from_value::<tribles::id::Id>() {
-                            if id == branch_id {
-                                is_meta_for_branch = true;
+                            if found.is_some() {
+                                break;
                             }
                         }
-                    } else if t.a() == &repo_head_attr {
-                        head_val = Some(*t.v::<Handle<Blake3, SimpleArchive>>());
+                    }
+                    found.ok_or_else(|| anyhow::anyhow!("branch named not found"))?
+                } else {
+                    anyhow::bail!("provide either --id HEX or --name NAME");
+                };
+
+                let repo_branch_attr: tribles::id::Id =
+                    tribles::id_hex!("8694CC73AF96A5E1C7635C677D1B928A");
+                let repo_head_attr: tribles::id::Id =
+                    tribles::id_hex!("272FBC56108F336C4D2E17289468C35F");
+
+                let mut printed = 0usize;
+                for item in reader.iter() {
+                    let (handle, _blob) = item.expect("infallible iteration");
+                    let handle: Value<Handle<Blake3, UnknownBlob>> = handle;
+                    let sah: Value<Handle<Blake3, SimpleArchive>> = handle.transmute();
+                    let Ok(meta): Result<TribleSet, _> =
+                        reader.get::<TribleSet, SimpleArchive>(sah)
+                    else {
+                        continue;
+                    };
+                    let mut is_meta_for_branch = false;
+                    let mut head_val: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
+                    for t in meta.iter() {
+                        if t.a() == &repo_branch_attr {
+                            let v: Value<tribles::prelude::valueschemas::GenId> = *t.v();
+                            if let Ok(id) = v.try_from_value::<tribles::id::Id>() {
+                                if id == branch_id {
+                                    is_meta_for_branch = true;
+                                }
+                            }
+                        } else if t.a() == &repo_head_attr {
+                            head_val = Some(*t.v::<Handle<Blake3, SimpleArchive>>());
+                        }
+                    }
+                    if !is_meta_for_branch {
+                        continue;
+                    }
+                    let meta_hash: Value<Hash<Blake3>> = Handle::to_hash(sah);
+                    let meta_hex: String = meta_hash.from_value();
+                    if let Some(h) = head_val {
+                        let head_hash: Value<Hash<Blake3>> = Handle::to_hash(h);
+                        let head_hex: String = head_hash.from_value();
+                        let present = reader.metadata(h).is_some();
+                        println!(
+                            "Meta blake3:{meta_hex}  Head blake3:{head_hex}  [{}]",
+                            if present { "present" } else { "missing" }
+                        );
+                    } else {
+                        println!("Meta blake3:{meta_hex}  Head: (unset)");
+                    }
+                    printed += 1;
+                    if printed >= limit {
+                        break;
                     }
                 }
-                if !is_meta_for_branch {
-                    continue;
+                if printed == 0 {
+                    println!("No metadata entries found for this branch in pile blobs.");
                 }
-                let meta_hash: Value<Hash<Blake3>> = Handle::to_hash(sah);
-                let meta_hex: String = meta_hash.from_value();
-                if let Some(h) = head_val {
-                    let head_hash: Value<Hash<Blake3>> = Handle::to_hash(h);
-                    let head_hex: String = head_hash.from_value();
-                    let present = reader.metadata(h).is_some();
-                    println!(
-                        "Meta blake3:{meta_hex}  Head blake3:{head_hex}  [{}]",
-                        if present { "present" } else { "missing" }
-                    );
-                } else {
-                    println!("Meta blake3:{meta_hex}  Head: (unset)");
-                }
-                printed += 1;
-                if printed >= limit {
-                    break;
-                }
-            }
-            if printed == 0 {
-                println!("No metadata entries found for this branch in pile blobs.");
-            }
+                Ok(())
+            })();
+            let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+            res.and(close_res)?;
         }
         Command::MergeImport {
             from_pile,
@@ -377,22 +399,59 @@ pub fn run(cmd: Command) -> Result<()> {
                 anyhow::bail!("branch not found: {name}")
             }
 
+            use tribles::id::Id;
+
             let mut src: Pile<Blake3> = Pile::open(&from_pile)?;
             let mut dst: Pile<Blake3> = Pile::open(&to_pile)?;
 
-            let src_bid = resolve_branch_id(&mut src, &from_id, &from_name)?;
-            let dst_bid = resolve_branch_id(&mut dst, &to_id, &to_name)?;
+            // We'll perform the potentially-failing copy step inside a closure
+            // and capture the results in locals so we can ensure both piles are
+            // explicitly closed whether the operation succeeds or fails.
+            let mut src_bid_opt: Option<Id> = None;
+            let mut dst_bid_opt: Option<Id> = None;
+            let mut src_head_opt: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
+            let mut stats_opt: Option<_> = None;
 
-            let src_head: Value<Handle<Blake3, SimpleArchive>> = src
-                .head(src_bid)?
-                .ok_or_else(|| anyhow::anyhow!("source branch head not found"))?;
+            let pre_res = (|| -> Result<(), anyhow::Error> {
+                let src_bid = resolve_branch_id(&mut src, &from_id, &from_name)?;
+                let dst_bid = resolve_branch_id(&mut dst, &to_id, &to_name)?;
 
-            let src_reader = src
-                .reader()
-                .map_err(|e| anyhow::anyhow!("src pile reader error: {e:?}"))?;
-            let stats = repo::copy_reachable(&src_reader, &mut dst, [src_head.transmute()])
-                .map_err(|e| anyhow::anyhow!("copy_reachable failed: {e}"))?;
+                let src_head: Value<Handle<Blake3, SimpleArchive>> = src
+                    .head(src_bid)?
+                    .ok_or_else(|| anyhow::anyhow!("source branch head not found"))?;
 
+                let src_reader = src
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("src pile reader error: {e:?}"))?;
+                let stats = repo::copy_reachable(&src_reader, &mut dst, [src_head.transmute()])
+                    .map_err(|e| anyhow::anyhow!("copy_reachable failed: {e}"))?;
+
+                src_bid_opt = Some(src_bid);
+                dst_bid_opt = Some(dst_bid);
+                src_head_opt = Some(src_head);
+                stats_opt = Some(stats);
+                Ok(())
+            })();
+
+            if let Err(e) = pre_res {
+                // Best-effort close of opened piles in case of early failure.
+                let _ = src.close();
+                let _ = dst.close();
+                return Err(e);
+            }
+
+            // Safe to unwrap because pre_res succeeded.
+            let src_bid = src_bid_opt.unwrap();
+            let dst_bid = dst_bid_opt.unwrap();
+            let src_head = src_head_opt.unwrap();
+            let stats = stats_opt.unwrap();
+
+            // Close the source pile now that we've finished reading from it.
+            src.close().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+
+            // `dst` has been moved into the repository below; create the repo and
+            // run merging operations, then ensure the destination storage is
+            // explicitly closed via `into_storage().close()`.
             let mut repo = Repository::new(dst, SigningKey::generate(&mut OsRng));
             let mut ws = repo
                 .pull(dst_bid)
@@ -409,6 +468,11 @@ pub fn run(cmd: Command) -> Result<()> {
                     .map_err(|e| anyhow::anyhow!("merge conflict: {e:?}"))?;
                 ws = incoming;
             }
+
+            // Ensure the destination pile (now owned by `repo`) is closed.
+            repo.into_storage()
+                .close()
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
 
             println!(
                 "merge-import: copied visited={} stored={} and attached source head to destination branch",

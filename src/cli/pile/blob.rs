@@ -59,25 +59,30 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::value::schemas::hash::Hash;
 
             let mut pile: Pile<Blake3> = Pile::open(&path)?;
-            let reader = pile
-                .reader()
-                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
-            for handle in reader.blobs() {
-                let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = handle?;
-                let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
-                let string: String = hash.from_value();
-                if metadata {
-                    if let Some(meta) = reader.metadata(handle) {
-                        let dt = UNIX_EPOCH + Duration::from_millis(meta.timestamp);
-                        let time: DateTime<Utc> = DateTime::<Utc>::from(dt);
-                        println!("{}\t{}\t{}", string, time.to_rfc3339(), meta.length);
+            let res = (|| -> Result<(), anyhow::Error> {
+                let reader = pile
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
+                for handle in reader.blobs() {
+                    let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = handle?;
+                    let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
+                    let string: String = hash.from_value();
+                    if metadata {
+                        if let Some(meta) = reader.metadata(handle) {
+                            let dt = UNIX_EPOCH + Duration::from_millis(meta.timestamp);
+                            let time: DateTime<Utc> = DateTime::<Utc>::from(dt);
+                            println!("{}\t{}\t{}", string, time.to_rfc3339(), meta.length);
+                        } else {
+                            println!("{string}");
+                        }
                     } else {
                         println!("{string}");
                     }
-                } else {
-                    println!("{string}");
                 }
-            }
+                Ok(())
+            })();
+            let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+            res.and(close_res)?;
         }
         Command::Put { pile, file } => {
             use tribles::blob::schemas::UnknownBlob;
@@ -89,13 +94,17 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::value::schemas::hash::Hash;
 
             let mut pile: Pile<Blake3> = Pile::open(&pile)?;
-            let file_handle = File::open(&file)?;
-            let bytes = unsafe { Bytes::map_file(&file_handle)? };
-            let handle = pile.put::<UnknownBlob, _>(bytes)?;
-            let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
-            let string: String = hash.from_value();
-            println!("{string}");
-            pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            let res = (|| -> Result<(), anyhow::Error> {
+                let file_handle = File::open(&file)?;
+                let bytes = unsafe { Bytes::map_file(&file_handle)? };
+                let handle = pile.put::<UnknownBlob, _>(bytes)?;
+                let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
+                let string: String = hash.from_value();
+                println!("{string}");
+                Ok(())
+            })();
+            let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+            res.and(close_res)?;
         }
         Command::Get {
             pile,
@@ -113,14 +122,20 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::value::schemas::hash::Handle;
 
             let mut pile: Pile<Blake3> = Pile::open(&pile)?;
-            let hash_val = parse_blob_handle(&handle)?;
-            let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash_val.into();
-            let reader = pile
-                .reader()
-                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
-            let bytes: Bytes = reader.get(handle_val)?;
-            let mut file = File::create(&output)?;
-            file.write_all(&bytes)?;
+            let res = (|| -> Result<(), anyhow::Error> {
+                let hash_val = parse_blob_handle(&handle)?;
+                let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
+                    hash_val.into();
+                let reader = pile
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
+                let bytes: Bytes = reader.get(handle_val)?;
+                let mut file = File::create(&output)?;
+                file.write_all(&bytes)?;
+                Ok(())
+            })();
+            let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+            res.and(close_res)?;
         }
         Command::Inspect { pile, handle } => {
             use chrono::DateTime;
@@ -139,29 +154,35 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::value::schemas::hash::Handle;
 
             let mut pile: Pile<Blake3> = Pile::open(&pile)?;
-            let hash_val = parse_blob_handle(&handle)?;
-            let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash_val.into();
-            let reader = pile
-                .reader()
-                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
-            let blob: Blob<UnknownBlob> = reader.get(handle_val)?;
-            let metadata: BlobMetadata = reader
-                .metadata(handle_val)
-                .ok_or_else(|| anyhow::anyhow!("blob not found"))?;
+            let res = (|| -> Result<(), anyhow::Error> {
+                let hash_val = parse_blob_handle(&handle)?;
+                let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
+                    hash_val.into();
+                let reader = pile
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
+                let blob: Blob<UnknownBlob> = reader.get(handle_val)?;
+                let metadata: BlobMetadata = reader
+                    .metadata(handle_val)
+                    .ok_or_else(|| anyhow::anyhow!("blob not found"))?;
 
-            let dt = UNIX_EPOCH + Duration::from_millis(metadata.timestamp);
-            let time: DateTime<Utc> = DateTime::<Utc>::from(dt);
+                let dt = UNIX_EPOCH + Duration::from_millis(metadata.timestamp);
+                let time: DateTime<Utc> = DateTime::<Utc>::from(dt);
 
-            let ftype = FileType::from_bytes(&blob.bytes);
-            let name = ftype.name();
+                let ftype = FileType::from_bytes(&blob.bytes);
+                let name = ftype.name();
 
-            let handle_str: String = hash_val.from_value();
-            println!(
-                "Hash: {handle_str}\nTime: {}\nLength: {} bytes\nType: {}",
-                time.to_rfc3339(),
-                metadata.length,
-                name
-            );
+                let handle_str: String = hash_val.from_value();
+                println!(
+                    "Hash: {handle_str}\nTime: {}\nLength: {} bytes\nType: {}",
+                    time.to_rfc3339(),
+                    metadata.length,
+                    name
+                );
+                Ok(())
+            })();
+            let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+            res.and(close_res)?;
         }
     }
     Ok(())

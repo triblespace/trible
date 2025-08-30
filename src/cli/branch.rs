@@ -43,25 +43,30 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let mut pile: Pile<Blake3> = Pile::open(&pile)?;
 
-            let reader = pile
-                .reader()
-                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
-            for r in repo::transfer::<_, _, Blake3, Blake3, tribles::blob::schemas::UnknownBlob>(
-                &reader,
-                &mut remote,
-            ) {
-                r?;
-            }
+            let res = (|| -> Result<(), anyhow::Error> {
+                let reader = pile
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
+                for r in repo::transfer::<_, _, Blake3, Blake3, tribles::blob::schemas::UnknownBlob>(
+                    &reader,
+                    &mut remote,
+                ) {
+                    r?;
+                }
 
-            let raw = hex::decode(branch)?;
-            let raw: [u8; 16] = raw.as_slice().try_into()?;
-            let id = Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?;
+                let raw = hex::decode(branch)?;
+                let raw: [u8; 16] = raw.as_slice().try_into()?;
+                let id = Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?;
 
-            let handle = pile
-                .head(id)?
-                .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
-            let old = remote.head(id)?;
-            remote.update(id, old, handle)?;
+                let handle = pile
+                    .head(id)?
+                    .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
+                let old = remote.head(id)?;
+                remote.update(id, old, handle)?;
+                Ok(())
+            })();
+            let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+            res.and(close_res)?;
         }
         BranchCommand::Pull { url, pile, branch } => {
             use tribles::id::Id;
@@ -75,25 +80,29 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let mut pile: Pile<Blake3> = Pile::open(&pile)?;
 
-            let reader = remote
-                .reader()
-                .map_err(|e| anyhow::anyhow!("remote reader error: {e:?}"))?;
-            for r in repo::transfer::<_, _, Blake3, Blake3, tribles::blob::schemas::UnknownBlob>(
-                &reader, &mut pile,
-            ) {
-                r?;
-            }
+            let res = (|| -> Result<(), anyhow::Error> {
+                let reader = remote
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("remote reader error: {e:?}"))?;
+                for r in repo::transfer::<_, _, Blake3, Blake3, tribles::blob::schemas::UnknownBlob>(
+                    &reader, &mut pile,
+                ) {
+                    r?;
+                }
 
-            let raw = hex::decode(branch)?;
-            let raw: [u8; 16] = raw.as_slice().try_into()?;
-            let id = Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?;
+                let raw = hex::decode(branch)?;
+                let raw: [u8; 16] = raw.as_slice().try_into()?;
+                let id = Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?;
 
-            let handle = remote
-                .head(id)?
-                .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
-            let old = pile.head(id)?;
-            pile.update(id, old, handle)?;
-            pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                let handle = remote
+                    .head(id)?
+                    .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
+                let old = pile.head(id)?;
+                pile.update(id, old, handle)?;
+                Ok(())
+            })();
+            let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+            res.and(close_res)?;
         }
     }
     Ok(())
