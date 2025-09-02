@@ -45,7 +45,8 @@ fn create_initializes_empty_pile() {
     let mut pile: Pile<Blake3> = Pile::open(&path).unwrap();
     // Explicitly refresh after open to populate in-memory indices.
     pile.refresh().unwrap();
-    assert!(pile.branches().next().is_none());
+    let mut iter = pile.branches().unwrap();
+    assert!(iter.next().is_none());
 }
 
 #[test]

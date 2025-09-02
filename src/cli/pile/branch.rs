@@ -86,7 +86,8 @@ pub fn run(cmd: Command) -> Result<()> {
                 // Refresh in-memory indices from the file so branches() reflects current state.
                 pile.refresh()?;
 
-                for branch in pile.branches() {
+                let mut iter = pile.branches()?;
+                while let Some(branch) = iter.next() {
                     let id = branch?;
                     println!("{id:X}");
                 }
@@ -132,7 +133,8 @@ pub fn run(cmd: Command) -> Result<()> {
                         .reader()
                         .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
                     let mut found: Option<Id> = None;
-                    for r in pile.branches() {
+                    let mut iter = pile.branches()?;
+                    while let Some(r) = iter.next() {
                         let bid = r?;
                         if let Some(meta_handle) = pile.head(bid)? {
                             let meta: TribleSet = reader
@@ -258,7 +260,8 @@ pub fn run(cmd: Command) -> Result<()> {
                     Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?
                 } else if let Some(name) = name {
                     let mut found: Option<Id> = None;
-                    for r in pile.branches() {
+                    let mut iter = pile.branches()?;
+                    while let Some(r) = iter.next() {
                         let bid = r?;
                         if let Some(meta_handle) = pile.head(bid)? {
                             let meta: TribleSet = reader
@@ -379,7 +382,8 @@ pub fn run(cmd: Command) -> Result<()> {
                 let reader = pile
                     .reader()
                     .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
-                for r in pile.branches() {
+                let mut iter = pile.branches()?;
+                while let Some(r) = iter.next() {
                     let bid = r?;
                     if let Some(meta_handle) = pile.head(bid)? {
                         if let Ok(meta) = reader.get::<TribleSet, SimpleArchive>(meta_handle) {
