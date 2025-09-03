@@ -180,8 +180,8 @@ pub fn run(cmd: PileCommand) -> Result<()> {
 
                         // Ensure in-memory indices are loaded before enumerating branches.
                         pile.refresh()?;
-                        let mut iter = pile.branches()?;
-                        while let Some(r) = iter.next() {
+                        let iter = pile.branches()?;
+                        for r in iter {
                             let bid = r?;
                             let meta_handle_opt = pile.head(bid)?;
                             let id_hex = format!("{bid:X}");
