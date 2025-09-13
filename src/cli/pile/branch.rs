@@ -10,6 +10,42 @@ use tribles::prelude::BlobStore;
 use tribles::prelude::BlobStoreGet;
 use tribles::prelude::BranchStore;
 
+use ed25519_dalek::SigningKey;
+use std::env;
+use std::fs;
+
+fn load_signing_key(path_opt: &Option<PathBuf>) -> Result<SigningKey, anyhow::Error> {
+    // Accept only a path to a file (via CLI flag or TRIBLES_SIGNING_KEY env var)
+    // containing a 64-char hex seed. If the path is absent, generate an
+    // ephemeral signing key.
+    let key_path_opt: Option<PathBuf> = if let Some(p) = path_opt {
+        Some(p.clone())
+    } else if let Ok(s) = env::var("TRIBLES_SIGNING_KEY") {
+        Some(PathBuf::from(s))
+    } else {
+        None
+    };
+
+    if let Some(p) = key_path_opt {
+        let content = fs::read_to_string(&p)
+            .map_err(|e| anyhow::anyhow!("failed to read signing key: {e}"))?;
+        let hexstr = content.trim();
+        if hexstr.len() != 64 || !hexstr.chars().all(|c| c.is_ascii_hexdigit()) {
+            anyhow::bail!(
+                "signing key file {} does not contain valid 64-char hex",
+                p.display()
+            );
+        }
+        let bytes = hex::decode(hexstr)
+            .map_err(|e| anyhow::anyhow!("invalid hex in signing key file: {e}"))?;
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes);
+        return Ok(SigningKey::from_bytes(&arr));
+    }
+
+    Ok(SigningKey::generate(&mut OsRng))
+}
+
 #[derive(Parser)]
 pub enum Command {
     /// List all branch identifiers in a pile file.
@@ -23,6 +59,9 @@ pub enum Command {
         pile: PathBuf,
         /// Name of the branch to create
         name: String,
+        /// Optional signing key path. The file should contain a 64-char hex seed.
+        #[arg(long)]
+        signing_key: Option<PathBuf>,
     },
     /// Inspect a branch in a pile and print its id, name, and current head handle.
     Inspect {
@@ -72,6 +111,25 @@ pub enum Command {
         /// Destination branch name. Mutually exclusive with --to-id
         #[arg(long, conflicts_with = "to_id")]
         to_name: Option<String>,
+        /// Optional signing key path. The file should contain a 64-char hex seed.
+        #[arg(long)]
+        signing_key: Option<PathBuf>,
+    },
+    /// Consolidate multiple branches with the same name into a single new branch.
+    Consolidate {
+        /// Path to the pile file to modify
+        pile: PathBuf,
+        /// Branch name to consolidate
+        name: String,
+        /// Optional name for the newly created consolidated branch
+        #[arg(long)]
+        out_name: Option<String>,
+        /// Dry run: show what would be done without making changes
+        #[arg(long)]
+        dry_run: bool,
+        /// Optional signing key path. The file should contain a 64-char hex seed.
+        #[arg(long)]
+        signing_key: Option<PathBuf>,
     },
 }
 
@@ -96,14 +154,18 @@ pub fn run(cmd: Command) -> Result<()> {
             let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
             res.and(close_res)?;
         }
-        Command::Create { pile, name } => {
+        Command::Create {
+            pile,
+            name,
+            signing_key,
+        } => {
             use ed25519_dalek::SigningKey;
             use tribles::repo::pile::Pile;
             use tribles::repo::Repository;
             use tribles::value::schemas::hash::Blake3;
-
             let pile: Pile<Blake3> = Pile::open(&pile)?;
-            let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
+            let key = load_signing_key(&signing_key)?;
+            let mut repo = Repository::new(pile, key);
             let ws = repo.branch(&name).map_err(|e| anyhow::anyhow!("{e:?}"))?;
             println!("{:#X}", ws.branch_id());
             // Ensure the underlying pile is closed and errors are surfaced.
@@ -354,6 +416,7 @@ pub fn run(cmd: Command) -> Result<()> {
             to_pile,
             to_id,
             to_name,
+            signing_key,
         } => {
             use ed25519_dalek::SigningKey;
 
@@ -456,7 +519,9 @@ pub fn run(cmd: Command) -> Result<()> {
             // `dst` has been moved into the repository below; create the repo and
             // run merging operations, then ensure the destination storage is
             // explicitly closed via `into_storage().close()`.
-            let mut repo = Repository::new(dst, SigningKey::generate(&mut OsRng));
+            // Load signing key for destination repo (cli flag > env var > generated)
+            let key = load_signing_key(&signing_key)?;
+            let mut repo = Repository::new(dst, key);
             let mut ws = repo
                 .pull(dst_bid)
                 .map_err(|e| anyhow::anyhow!("failed to open destination branch: {e:?}"))?;
@@ -483,6 +548,166 @@ pub fn run(cmd: Command) -> Result<()> {
                 stats.visited, stats.stored
             );
         }
+        Command::Consolidate {
+            pile,
+            name,
+            out_name,
+            dry_run,
+            signing_key,
+        } => {
+            use tribles::prelude::blobschemas::SimpleArchive;
+            use tribles::repo::pile::Pile;
+            use tribles::repo::Repository;
+            use tribles::trible::TribleSet;
+            use tribles::value::schemas::hash::Blake3;
+            use tribles::value::schemas::hash::Handle;
+            use tribles::value::Value;
+            // Trait imports required for method resolution
+            use tribles::blob::ToBlob;
+            use tribles::prelude::BlobStorePut;
+
+            let mut pile: Pile<Blake3> = Pile::open(&pile)?;
+
+            // Ensure in-memory indices are populated.
+            pile.refresh()?;
+
+            let reader = pile
+                .reader()
+                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
+
+            // Attribute ids used in branch metadata
+            let name_attr = tribles::metadata::ATTR_NAME;
+            let repo_head_attr: tribles::id::Id =
+                tribles::id_hex!("272FBC56108F336C4D2E17289468C35F");
+
+            // Collect all branch ids whose metadata name matches `name`.
+            let mut candidates: Vec<(
+                tribles::id::Id,
+                Option<Value<Handle<Blake3, SimpleArchive>>>,
+            )> = Vec::new();
+            for r in pile.branches()? {
+                let bid = r?;
+                if let Some(meta_handle) = pile.head(bid)? {
+                    if reader.metadata(meta_handle).is_some() {
+                        match reader.get::<TribleSet, SimpleArchive>(meta_handle) {
+                            Ok(meta) => {
+                                let mut branch_name: Option<String> = None;
+                                let mut head_val: Option<Value<Handle<Blake3, SimpleArchive>>> =
+                                    None;
+                                for t in meta.iter() {
+                                    if t.a() == &name_attr {
+                                        let n: Value<
+                                            tribles::value::schemas::shortstring::ShortString,
+                                        > = *t.v();
+                                        branch_name = Some(n.from_value());
+                                    } else if t.a() == &repo_head_attr {
+                                        head_val = Some(*t.v::<Handle<Blake3, SimpleArchive>>());
+                                    }
+                                }
+                                if let Some(n) = branch_name {
+                                    if n == name {
+                                        candidates.push((bid, head_val));
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                // Ignore malformed metadata blobs for now.
+                            }
+                        }
+                    }
+                }
+            }
+
+            if candidates.is_empty() {
+                println!("no branches with name '{name}' found");
+                let _ = pile.close();
+                return Ok(());
+            }
+
+            println!("found {} branch(es) named '{name}'", candidates.len());
+            for (bid, head) in &candidates {
+                let id_hex = format!("{bid:X}");
+                if let Some(h) = head {
+                    let hh: Value<tribles::value::schemas::hash::Hash<Blake3>> =
+                        Handle::to_hash(*h);
+                    let hex: String = hh.from_value();
+                    println!("- {id_hex} -> commit blake3:{hex}");
+                } else {
+                    println!("- {id_hex} -> <no head>");
+                }
+            }
+
+            if dry_run {
+                println!("dry-run: no changes will be made");
+                let _ = pile.close();
+                return Ok(());
+            }
+
+            if candidates.len() == 1 {
+                println!("only one branch present; nothing to consolidate");
+                let _ = pile.close();
+                return Ok(());
+            }
+
+            // Collect parent commit handles (skip branches without a head)
+            let parents: Vec<Value<Handle<Blake3, SimpleArchive>>> =
+                candidates.iter().filter_map(|(_, h)| *h).collect();
+
+            if parents.is_empty() {
+                let _ = pile.close();
+                anyhow::bail!("no branch heads available to attach");
+            }
+
+            // Create a single merge commit that has all branch heads as parents.
+            let signing_key = load_signing_key(&signing_key)?;
+            let commit_set =
+                tribles::repo::commit::commit_metadata(&signing_key, parents.clone(), None, None);
+            let commit_blob = commit_set.to_blob();
+
+            // Store the commit blob in the pile before creating the branch.
+            let commit_handle = pile
+                .put(commit_blob)
+                .map_err(|e| anyhow::anyhow!("failed to put commit blob: {e:?}"))?;
+
+            // Decide output branch name
+            let out = out_name.unwrap_or_else(|| format!("{name}-consolidated"));
+
+            // Move the pile into a Repository so we can atomically create the branch.
+            let mut repo = Repository::new(pile, signing_key.clone());
+            let ws = repo
+                .branch_from_with_key(&out, commit_handle, signing_key)
+                .map_err(|e| anyhow::anyhow!("failed to create consolidated branch: {e:?}"))?;
+
+            let new_id = ws.branch_id();
+            repo.into_storage()
+                .close()
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+
+            println!("created consolidated branch '{out}' with id {new_id:X}");
+        }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn parse_signing_key_hex_and_file() {
+        // File containing hex
+        let mut seed = [0u8; 32];
+        for i in 0..32 {
+            seed[i] = i as u8;
+        }
+        let hex = hex::encode(seed);
+        let mut f = NamedTempFile::new().expect("tmpfile");
+        writeln!(f, "{}", hex).expect("write");
+        let path = f.path().to_path_buf();
+        let key = load_signing_key(&Some(path)).expect("parse file");
+        let expected = ed25519_dalek::SigningKey::from_bytes(&seed);
+        assert_eq!(key.to_bytes(), expected.to_bytes());
+    }
 }
