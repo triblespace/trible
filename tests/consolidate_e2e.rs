@@ -4,9 +4,9 @@ use rand::rngs::OsRng;
 use std::collections::HashSet;
 use std::convert::TryInto;
 use tempfile::tempdir;
-use tribles::prelude::*;
-use tribles::prelude::blobschemas::SimpleArchive;
 use tribles::metadata;
+use tribles::prelude::blobschemas::SimpleArchive;
+use tribles::prelude::*;
 use tribles::repo::pile::Pile;
 use tribles::repo::Repository;
 use tribles::trible::TribleSet;
@@ -69,7 +69,11 @@ fn consolidate_merges_branch_heads() {
         .output()
         .expect("run trible");
 
-    assert!(out.status.success(), "consolidate failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "consolidate failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
 
     // Parse new branch id (32 hex chars)
@@ -119,5 +123,8 @@ fn consolidate_merges_branch_heads() {
 
     // original_heads may contain duplicates if some branches had no head; use set
     let orig_set: HashSet<String> = original_heads.into_iter().collect();
-    assert_eq!(parents, orig_set, "parents of merge commit do not match original heads");
+    assert_eq!(
+        parents, orig_set,
+        "parents of merge commit do not match original heads"
+    );
 }
