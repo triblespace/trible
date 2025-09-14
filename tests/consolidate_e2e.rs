@@ -32,7 +32,7 @@ fn consolidate_merges_branch_heads() {
             let mut ws = repo.branch("mem").expect("create branch");
             let e = ufoid();
             let mut content = TribleSet::new();
-            content += entity!(&e, { metadata::name: format!("branch-{i}") });
+            content += entity! { &e @ metadata::name: format!("branch-{i}") };
             ws.commit(content, Some(&format!("commit-{i}")));
 
             // Push and assert no conflict
