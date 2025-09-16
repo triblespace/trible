@@ -165,7 +165,9 @@ pub fn run(cmd: Command) -> Result<()> {
             let pile: Pile<Blake3> = Pile::open(&pile)?;
             let key = load_signing_key(&signing_key)?;
             let mut repo = Repository::new(pile, key);
-            let branch_id = repo.create_branch(&name, None).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            let branch_id = repo
+                .create_branch(&name, None)
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
             println!("{:#X}", *branch_id);
             // Ensure the underlying pile is closed and errors are surfaced.
             repo.into_storage()
