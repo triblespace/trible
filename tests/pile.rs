@@ -18,7 +18,7 @@ fn list_branches_outputs_branch_id() {
     {
         let pile: Pile<Blake3> = Pile::open(&path).unwrap();
         let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
-        repo.branch("main").expect("create branch");
+        repo.create_branch("main", None).expect("create branch");
         // drop repo to flush changes
     }
 

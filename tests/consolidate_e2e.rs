@@ -29,7 +29,8 @@ fn consolidate_merges_branch_heads() {
         let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
 
         for i in 0..3 {
-            let mut ws = repo.branch("mem").expect("create branch");
+            let branch_id = repo.create_branch("mem", None).expect("create branch");
+            let mut ws = repo.pull(*branch_id).expect("pull");
             let e = ufoid();
             let mut content = TribleSet::new();
             content += entity! { &e @ metadata::name: format!("branch-{i}") };

@@ -159,15 +159,14 @@ pub fn run(cmd: Command) -> Result<()> {
             name,
             signing_key,
         } => {
-            use ed25519_dalek::SigningKey;
             use tribles::repo::pile::Pile;
             use tribles::repo::Repository;
             use tribles::value::schemas::hash::Blake3;
             let pile: Pile<Blake3> = Pile::open(&pile)?;
             let key = load_signing_key(&signing_key)?;
             let mut repo = Repository::new(pile, key);
-            let ws = repo.branch(&name).map_err(|e| anyhow::anyhow!("{e:?}"))?;
-            println!("{:#X}", ws.branch_id());
+            let branch_id = repo.create_branch(&name, None).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            println!("{:#X}", *branch_id);
             // Ensure the underlying pile is closed and errors are surfaced.
             repo.into_storage()
                 .close()
@@ -418,8 +417,6 @@ pub fn run(cmd: Command) -> Result<()> {
             to_name,
             signing_key,
         } => {
-            use ed25519_dalek::SigningKey;
-
             use tribles::prelude::blobschemas::SimpleArchive;
             use tribles::repo;
             use tribles::repo::pile::Pile;
@@ -674,11 +671,10 @@ pub fn run(cmd: Command) -> Result<()> {
 
             // Move the pile into a Repository so we can atomically create the branch.
             let mut repo = Repository::new(pile, signing_key.clone());
-            let ws = repo
-                .branch_from_with_key(&out, commit_handle, signing_key)
+            let new_id = *repo
+                .create_branch_with_key(&out, Some(commit_handle), signing_key)
                 .map_err(|e| anyhow::anyhow!("failed to create consolidated branch: {e:?}"))?;
 
-            let new_id = ws.branch_id();
             repo.into_storage()
                 .close()
                 .map_err(|e| anyhow::anyhow!("{e:?}"))?;
