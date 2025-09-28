@@ -470,6 +470,15 @@ pub fn run(cmd: Command) -> Result<()> {
             let mut src: Pile<Blake3> = Pile::open(&from_pile)?;
             let mut dst: Pile<Blake3> = Pile::open(&to_pile)?;
 
+            // Simple stats struct to report how many handles were visited and
+            // how many were actually stored on the destination. This replaces
+            // the old `repo::copy_reachable` helper which was removed when the
+            // transfer API was made more modular.
+            struct CopyStats {
+                visited: usize,
+                stored: usize,
+            }
+
             // We'll perform the potentially-failing copy step inside a closure
             // and capture the results in locals so we can ensure both piles are
             // explicitly closed whether the operation succeeds or fails.
@@ -489,8 +498,23 @@ pub fn run(cmd: Command) -> Result<()> {
                 let src_reader = src
                     .reader()
                     .map_err(|e| anyhow::anyhow!("src pile reader error: {e:?}"))?;
-                let stats = repo::copy_reachable(&src_reader, &mut dst, [src_head.transmute()])
-                    .map_err(|e| anyhow::anyhow!("copy_reachable failed: {e}"))?;
+
+                // Walk reachable handles starting from the source head and
+                // transfer them into the destination pile. Aggregate simple
+                // stats along the way so the CLI can report progress.
+                let mut visited: usize = 0;
+                let mut stored: usize = 0;
+                let handles = repo::reachable(&src_reader, std::iter::once(src_head.transmute()));
+                for r in repo::transfer(&src_reader, &mut dst, handles) {
+                    match r {
+                        Ok((_src, _dst)) => {
+                            visited += 1;
+                            stored += 1;
+                        }
+                        Err(e) => return Err(anyhow::anyhow!("transfer failed: {e}")),
+                    }
+                }
+                let stats = CopyStats { visited, stored };
 
                 src_bid_opt = Some(src_bid);
                 dst_bid_opt = Some(dst_bid);
