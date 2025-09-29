@@ -531,7 +531,7 @@ pub fn run(cmd: Command) -> Result<()> {
             }
 
             // Safe to unwrap because pre_res succeeded.
-            let src_bid = src_bid_opt.unwrap();
+            let _src_bid = src_bid_opt.unwrap();
             let dst_bid = dst_bid_opt.unwrap();
             let src_head = src_head_opt.unwrap();
             let stats = stats_opt.unwrap();
