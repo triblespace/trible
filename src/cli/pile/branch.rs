@@ -552,7 +552,7 @@ pub fn run(cmd: Command) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("merge failed: {e:?}"))?;
 
             while let Some(mut incoming) = repo
-                .push(&mut ws)
+                .try_push(&mut ws)
                 .map_err(|e| anyhow::anyhow!("push failed: {e:?}"))?
             {
                 incoming

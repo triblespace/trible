@@ -37,7 +37,7 @@ fn consolidate_merges_branch_heads() {
             ws.commit(content, Some(&format!("commit-{i}")));
 
             // Push and assert no conflict
-            let res = repo.push(&mut ws).expect("push");
+            let res = repo.try_push(&mut ws).expect("push");
             assert!(res.is_none(), "unexpected push conflict");
 
             let head = ws.head().expect("head present");
