@@ -89,6 +89,36 @@ pub enum Command {
         #[arg(long, default_value_t = 50)]
         limit: usize,
     },
+    /// Export a branch from one pile into another, copying reachable blobs.
+    ///
+    /// This transfers all blobs reachable from the source branch metadata into
+    /// the destination pile and sets the destination branch head to the same
+    /// branch metadata handle (preserving the branch id).
+    Export {
+        /// Path to the source pile file
+        #[arg(long)]
+        from_pile: PathBuf,
+        /// Branch identifier to export (hex encoded)
+        #[arg(long)]
+        branch: String,
+        /// Path to the destination pile file
+        #[arg(long)]
+        to_pile: PathBuf,
+        /// Optional signing key path for destination repo operations.
+        #[arg(long)]
+        signing_key: Option<PathBuf>,
+    },
+    /// Show statistics for a branch: commits, triples, entities, attributes.
+    Stats {
+        /// Path to the pile file to inspect
+        pile: PathBuf,
+        /// Branch identifier to inspect (hex encoded). Mutually exclusive with --name
+        #[arg(long, conflicts_with = "name")]
+        id: Option<String>,
+        /// Branch name to inspect. Mutually exclusive with --id
+        #[arg(long, conflicts_with = "id")]
+        name: Option<String>,
+    },
     /// Import reachable blobs from a source branch into a target pile and
     /// attach them to the target branch via a single merge commit.
     MergeImport {
@@ -405,6 +435,229 @@ pub fn run(cmd: Command) -> Result<()> {
                 if printed == 0 {
                     println!("No metadata entries found for this branch in pile blobs.");
                 }
+                Ok(())
+            })();
+            let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+            res.and(close_res)?;
+        }
+        Command::Export { from_pile, branch, to_pile, signing_key } => {
+            use tribles::prelude::blobschemas::SimpleArchive;
+            use tribles::repo;
+            use tribles::repo::pile::Pile;
+            use tribles::value::schemas::hash::Blake3;
+            use tribles::value::schemas::hash::Handle;
+            use tribles::value::Value;
+
+            // Parse branch id hex
+            let raw = hex::decode(branch)?;
+            let raw: [u8; 16] = raw.as_slice().try_into()?;
+            let bid = tribles::id::Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?;
+
+            let mut src: Pile<Blake3> = Pile::open(&from_pile)?;
+            let mut dst: Pile<Blake3> = Pile::open(&to_pile)?;
+
+            // Obtain the source branch metadata handle (root) and ensure it exists.
+            let src_meta = src.head(bid)?.ok_or_else(|| anyhow::anyhow!("source branch head not found"))?;
+
+            // Prepare a mapping from source handle raw -> destination handle for later lookup.
+            use std::collections::HashMap;
+            use tribles::value::VALUE_LEN;
+            let mut mapping: HashMap<[u8; VALUE_LEN], Value<Handle<Blake3, _>>> = HashMap::new();
+
+            let src_reader = src.reader().map_err(|e| anyhow::anyhow!("src pile reader error: {e:?}"))?;
+            let handles = repo::reachable(&src_reader, std::iter::once(src_meta.transmute()));
+
+            let mut visited: usize = 0;
+            let mut stored: usize = 0;
+            for r in repo::transfer(&src_reader, &mut dst, handles) {
+                match r {
+                    Ok((src_h, dst_h)) => {
+                        visited += 1;
+                        stored += 1;
+                        mapping.insert(src_h.raw, dst_h);
+                    }
+                    Err(e) => return Err(anyhow::anyhow!("transfer failed: {e}")),
+                }
+            }
+
+            // Find the destination handle corresponding to the source branch meta.
+            let dst_meta = mapping
+                .get(&src_meta.raw)
+                .ok_or_else(|| anyhow::anyhow!("destination meta handle not found after transfer"))?
+                .clone();
+
+            // Update the destination pile branch pointer to the copied meta handle.
+            let old = dst.head(bid)?;
+            let res = dst
+                .update(bid, old, dst_meta.transmute())
+                .map_err(|e| anyhow::anyhow!("destination branch update failed: {e:?}"))?;
+            match res {
+                tribles::repo::PushResult::Success() => {
+                    println!("export: copied visited={} stored={} and set branch {:#X}", visited, stored, bid);
+                }
+                tribles::repo::PushResult::Conflict(existing) => {
+                    println!("export: copied visited={} stored={} but branch update conflicted: existing={:?}", visited, stored, existing);
+                }
+            }
+
+            // Close piles explicitly.
+            src.close().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            dst.close().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        }
+        Command::Stats { pile, id, name } => {
+            use std::collections::{BTreeSet, HashSet};
+            use tribles::id::Id;
+            use tribles::prelude::blobschemas::SimpleArchive;
+            use tribles::prelude::valueschemas::Handle;
+
+            use tribles::repo::pile::Pile;
+            use tribles::trible::TribleSet;
+            use tribles::value::schemas::hash::Blake3;
+            use tribles::value::schemas::hash::Hash;
+            use tribles::value::Value;
+
+            let mut pile: Pile<Blake3> = Pile::open(&pile)?;
+            let res = (|| -> Result<(), anyhow::Error> {
+                // Ensure indices are loaded before scanning
+                pile.refresh()?;
+                let reader = pile
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
+
+                let branch_id: Id = if let Some(id_hex) = id {
+                    let raw = hex::decode(id_hex)?;
+                    let raw: [u8; 16] = raw.as_slice().try_into()?;
+                    Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?
+                } else if let Some(name) = name {
+                    let mut found: Option<Id> = None;
+                    let iter = pile.branches()?;
+                    for r in iter {
+                        let bid = r?;
+                        if let Some(meta_handle) = pile.head(bid)? {
+                            let meta: TribleSet = reader
+                                .get::<TribleSet, SimpleArchive>(meta_handle)
+                                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                            for t in meta.iter() {
+                                if t.a() == &tribles::metadata::ATTR_NAME {
+                                    let n: Value<
+                                        tribles::value::schemas::shortstring::ShortString,
+                                    > = *t.v();
+                                    let nstr: String = n.from_value();
+                                    if nstr == name {
+                                        found = Some(bid);
+                                        break;
+                                    }
+                                }
+                            }
+                            if found.is_some() {
+                                break;
+                            }
+                        }
+                    }
+                    found.ok_or_else(|| anyhow::anyhow!("branch named not found"))?
+                } else {
+                    anyhow::bail!("provide either --id HEX or --name NAME");
+                };
+
+                // Traversal attributes
+                let repo_parent_attr: tribles::id::Id =
+                    tribles::id_hex!("317044B612C690000D798CA660ECFD2A");
+                let repo_content_attr: tribles::id::Id =
+                    tribles::id_hex!("4DD4DDD05CC31734B03ABB4E43188B1F");
+
+                // Resolve branch head
+                let meta_handle = pile
+                    .head(branch_id)?
+                    .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
+
+                let mut head_opt: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
+                if reader.metadata(meta_handle).is_some() {
+                    if let Ok(meta) =
+                        reader.get::<TribleSet, SimpleArchive>(meta_handle)
+                    {
+                        let repo_head_attr: tribles::id::Id =
+                            tribles::id_hex!("272FBC56108F336C4D2E17289468C35F");
+                        for t in meta.iter() {
+                            if t.a() == &repo_head_attr {
+                                head_opt = Some(*t.v::<Handle<Blake3, SimpleArchive>>());
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                let head = head_opt.ok_or_else(|| anyhow::anyhow!("branch has no head set"))?;
+
+                // Traverse commit graph, union content tribles
+                let mut visited: BTreeSet<String> = BTreeSet::new();
+                let mut stack: Vec<Value<Handle<Blake3, SimpleArchive>>> = vec![head];
+                let mut commit_count: usize = 0;
+                let mut total_triples_accum: usize = 0;
+                let mut unioned = TribleSet::new();
+
+                while let Some(h) = stack.pop() {
+                    let hh: Value<Hash<Blake3>> = Handle::to_hash(h);
+                    let hex: String = hh.from_value();
+                    if !visited.insert(hex.clone()) {
+                        continue;
+                    }
+                    commit_count += 1;
+
+                    if reader.metadata(h).is_none() {
+                        continue;
+                    }
+
+                    let meta: TribleSet = match reader.get::<TribleSet, SimpleArchive>(h) {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    };
+
+                    let mut parents: Vec<Value<Handle<Blake3, SimpleArchive>>> = Vec::new();
+                    let mut content_handles: Vec<Value<Handle<Blake3, SimpleArchive>>> = Vec::new();
+                    for t in meta.iter() {
+                        if t.a() == &repo_content_attr {
+                            let c = *t.v::<Handle<Blake3, SimpleArchive>>();
+                            content_handles.push(c);
+                        } else if t.a() == &repo_parent_attr {
+                            parents.push(*t.v::<Handle<Blake3, SimpleArchive>>());
+                        }
+                    }
+
+                    for c in content_handles {
+                        if reader.metadata(c).is_none() {
+                            continue;
+                        }
+                        let content: TribleSet = match
+                            reader.get::<TribleSet, SimpleArchive>(c)
+                        {
+                            Ok(s) => s,
+                            Err(_) => continue,
+                        };
+                        total_triples_accum += content.len();
+                        unioned.union(content);
+                    }
+
+                    for p in parents {
+                        stack.push(p);
+                    }
+                }
+
+                // Count unique triples, entities, attributes
+                let unique_triples = unioned.len();
+                let mut entities: HashSet<Id> = HashSet::new();
+                let mut attributes: HashSet<Id> = HashSet::new();
+                for t in unioned.iter() {
+                    entities.insert(*t.e());
+                    attributes.insert(*t.a());
+                }
+
+                println!("Branch: {branch_id:X}");
+                println!("Commits: {commit_count}");
+                println!("Triples (unique): {unique_triples}");
+                println!("Triples (accum): {total_triples_accum}");
+                println!("Entities: {}", entities.len());
+                println!("Attributes: {}", attributes.len());
+
                 Ok(())
             })();
             let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
