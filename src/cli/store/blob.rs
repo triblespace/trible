@@ -4,6 +4,9 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use crate::cli::util::parse_blob_handle;
+use tribles::repo::objectstore::ObjectStoreRemote;
+use tribles::value::schemas::hash::Blake3;
+use url::Url;
 
 #[derive(Parser)]
 pub enum Command {
@@ -47,23 +50,19 @@ pub enum Command {
 pub fn run(cmd: Command) -> Result<()> {
     match cmd {
         Command::List { url } => {
-            use futures::StreamExt;
-            use object_store::parse_url;
-            use object_store::ObjectStore;
+            use tribles::repo::objectstore::ObjectStoreRemote;
+            use tribles::value::schemas::hash::Blake3;
             use url::Url;
 
             let url = Url::parse(&url)?;
-            let (store, path) = parse_url(&url)?;
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(async move {
-                let mut stream = store.list(Some(&path));
-                while let Some(meta) = stream.next().await.transpose()? {
-                    println!("{}", meta.location);
+            let remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
+            let mut iter = remote.list_raw();
+            while let Some(meta_res) = iter.next() {
+                match meta_res {
+                    Ok(meta) => println!("{}", meta.location),
+                    Err(e) => return Err(anyhow::anyhow!("list failed: {e:?}")),
                 }
-                Ok::<(), anyhow::Error>(())
-            })?;
+            }
             Ok(())
         }
         Command::Put { url, file } => {
@@ -116,7 +115,6 @@ pub fn run(cmd: Command) -> Result<()> {
         }
         Command::Inspect { url, handle } => {
             use file_type::FileType;
-            use futures::executor::block_on;
             use object_store::parse_url;
             use object_store::ObjectStore;
             use tribles::blob::schemas::UnknownBlob;
@@ -144,7 +142,7 @@ pub fn run(cmd: Command) -> Result<()> {
                 .next_back()
                 .ok_or_else(|| anyhow::anyhow!("invalid handle"))?;
             let path = base.child("blobs").child(handle_hex);
-            let meta = block_on(async { store.head(&path).await })?;
+            let meta = remote.head_raw(&path)?;
             let time = meta.last_modified;
             let length = meta.size;
 
@@ -168,14 +166,12 @@ pub fn run(cmd: Command) -> Result<()> {
             use url::Url;
 
             let url = Url::parse(&url)?;
+            let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let (store, path) = parse_url(&url)?;
             let hash_val = parse_blob_handle(&handle)?;
             let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash_val.into();
             let blob_path = path.child("blobs").child(hex::encode(handle_val.raw));
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            rt.block_on(async move { store.delete(&blob_path).await })?;
+            remote.delete_raw(&blob_path)?;
             Ok(())
         }
     }
