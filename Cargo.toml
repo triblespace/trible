@@ -29,11 +29,10 @@ clap_complete = "4.5.55"
 anyhow = "1.0.80"
 rand = "0.8.5"
 hex = "0.4.3"
-tribles = { git = "https://github.com/triblespace/tribles-rust.git", branch = "main" }
+tribles = { path = "../tribles-rust" }
 file_type = "=0.8.7"
 chrono = "0.4"
 object_store = { version = "0.12", default-features = false, features = ["aws", "fs"] }
-tokio = { version = "1", features = ["rt"] }
 futures = "0.3"
 url = "2"
 ed25519-dalek = "2.2.0"
