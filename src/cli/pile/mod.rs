@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use tribles::prelude::BlobStore;
 use tribles::prelude::BlobStoreGet;
 use tribles::prelude::BranchStore;
+use tribles::repo::BlobStoreMeta;
 
 pub mod blob;
 pub mod branch;
@@ -136,8 +137,14 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                                 if !visited.insert(hex.clone()) {
                                     continue;
                                 }
-                                if reader.metadata(h).is_none() {
-                                    return (count, Some(format!("commit blake3:{hex} missing")));
+                                match reader.metadata(h) {
+                                    Ok(None) => {
+                                        return (count, Some(format!("commit blake3:{hex} missing")));
+                                    }
+                                    Ok(Some(_)) => {}
+                                    Err(e) => {
+                                        return (count, Some(format!("commit blake3:{hex} metadata error: {e:?}")));
+                                    }
                                 }
                                 let meta: TribleSet =
                                     match reader.get::<TribleSet, SimpleArchive>(h) {
@@ -157,8 +164,14 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                                 for t in meta.iter() {
                                     if t.a() == &repo_content_attr {
                                         let c = *t.v::<Handle<Blake3, SimpleArchive>>();
-                                        if reader.metadata(c).is_some() {
-                                            content_ok = true;
+                                        match reader.metadata(c) {
+                                            Ok(Some(_)) => {
+                                                content_ok = true;
+                                            }
+                                            Ok(None) => {}
+                                            Err(e) => {
+                                                return (count, Some(format!("commit blake3:{hex} metadata error: {e:?}")));
+                                            }
                                         }
                                     } else if t.a() == &repo_parent_attr {
                                         parents.push(*t.v::<Handle<Blake3, SimpleArchive>>());
@@ -194,7 +207,7 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                                     any_error = true;
                                 }
                                 Some(meta_handle) => {
-                                    let meta_present = reader.metadata(meta_handle).is_some();
+                                    let meta_present = reader.metadata(meta_handle)?.is_some();
                                     let mut name_val: Option<String> = None;
                                     let mut head_val: Option<Value<Handle<Blake3, SimpleArchive>>> =
                                         None;

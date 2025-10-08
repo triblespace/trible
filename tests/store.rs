@@ -11,16 +11,30 @@ use tribles::value::schemas::hash::Blake3;
 fn store_blob_list_outputs_file() {
     let dir = tempdir().unwrap();
     let file = dir.path().join("file.bin");
-    std::fs::write(&file, b"hi").unwrap();
+    let contents = b"hi";
+    std::fs::write(&file, contents).unwrap();
 
     let url = format!("file://{}", dir.path().display());
 
+    let digest = blake3::hash(contents).to_hex().to_string();
+    let handle = format!("blake3:{digest}");
+    let pattern = format!("^{handle}\n$");
+
+    // Upload via CLI and ensure put prints the handle
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["store", "blob", "put", &url, file.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match(&pattern).unwrap());
+
+    // Now list should show the repo-managed blob handle
     Command::cargo_bin("trible")
         .unwrap()
         .args(["store", "blob", "list", &url])
         .assert()
         .success()
-        .stdout(predicate::str::contains("file.bin"));
+        .stdout(predicate::str::contains(&digest));
 }
 
 #[test]

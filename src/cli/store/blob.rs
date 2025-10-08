@@ -5,8 +5,18 @@ use std::path::PathBuf;
 
 use crate::cli::util::parse_blob_handle;
 use tribles::repo::objectstore::ObjectStoreRemote;
+use tribles::repo::BlobStore;
+use tribles::repo::BlobStoreList;
+use tribles::repo::BlobStoreGet;
+use tribles::repo::BlobStoreForget;
 use tribles::value::schemas::hash::Blake3;
+use tribles::value::schemas::hash::Handle;
 use url::Url;
+use chrono::{NaiveDateTime, DateTime, Utc};
+use tribles::repo::BlobStoreMeta;
+use tribles::blob::schemas::UnknownBlob;
+use tribles::blob::Bytes;
+use object_store::parse_url;
 
 #[derive(Parser)]
 pub enum Command {
@@ -50,30 +60,33 @@ pub enum Command {
 pub fn run(cmd: Command) -> Result<()> {
     match cmd {
         Command::List { url } => {
-            use tribles::repo::objectstore::ObjectStoreRemote;
-            use tribles::value::schemas::hash::Blake3;
-            use url::Url;
-
             let url = Url::parse(&url)?;
-            let remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
-            let mut iter = remote.list_raw();
-            while let Some(meta_res) = iter.next() {
-                match meta_res {
-                    Ok(meta) => println!("{}", meta.location),
+
+            
+// Prefer the repo-managed blob listing. Do not fall back to raw
+            // listing automatically — bare files were a bug, not a feature.
+            let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
+            let mut reader = remote.reader().map_err(|e| anyhow::anyhow!("remote reader error: {e:?}"))?;
+
+            for item_res in reader.blobs() {
+                match item_res {
+                    Ok(handle_val) => {
+                        let hash: tribles::value::Value<tribles::value::schemas::hash::Hash<Blake3>> = Handle::to_hash(handle_val);
+                        let string: String = hash.from_value();
+                        println!("{}", string);
+                    }
                     Err(e) => return Err(anyhow::anyhow!("list failed: {e:?}")),
                 }
             }
+
             Ok(())
         }
         Command::Put { url, file } => {
             use tribles::blob::schemas::UnknownBlob;
             use tribles::blob::Bytes;
             use tribles::prelude::BlobStorePut;
-            use tribles::repo::objectstore::ObjectStoreRemote;
-            use tribles::value::schemas::hash::Blake3;
-            use tribles::value::schemas::hash::Handle;
+
             use tribles::value::schemas::hash::Hash;
-            use url::Url;
 
             let url = Url::parse(&url)?;
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
@@ -92,14 +105,9 @@ pub fn run(cmd: Command) -> Result<()> {
         } => {
             use std::io::Write;
 
-            use tribles::blob::schemas::UnknownBlob;
-            use tribles::blob::Bytes;
             use tribles::prelude::BlobStore;
             use tribles::prelude::BlobStoreGet;
-            use tribles::repo::objectstore::ObjectStoreRemote;
-            use tribles::value::schemas::hash::Blake3;
-            use tribles::value::schemas::hash::Handle;
-            use url::Url;
+
 
             let url = Url::parse(&url)?;
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
@@ -117,14 +125,8 @@ pub fn run(cmd: Command) -> Result<()> {
             use file_type::FileType;
             use object_store::parse_url;
             use object_store::ObjectStore;
-            use tribles::blob::schemas::UnknownBlob;
             use tribles::blob::Blob;
-            use tribles::prelude::BlobStore;
-            use tribles::prelude::BlobStoreGet;
-            use tribles::repo::objectstore::ObjectStoreRemote;
-            use tribles::value::schemas::hash::Blake3;
-            use tribles::value::schemas::hash::Handle;
-            use url::Url;
+
 
             let url = Url::parse(&url)?;
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
@@ -142,36 +144,43 @@ pub fn run(cmd: Command) -> Result<()> {
                 .next_back()
                 .ok_or_else(|| anyhow::anyhow!("invalid handle"))?;
             let path = base.child("blobs").child(handle_hex);
-            let meta = remote.head_raw(&path)?;
-            let time = meta.last_modified;
-            let length = meta.size;
+            let meta = reader.metadata(handle_val.clone())?;
+            let length = meta.as_ref().map(|m| m.length).unwrap_or_default();
+            let time_str = if let Some(m) = meta {
+                let secs = (m.timestamp / 1000) as i64;
+                let nsecs = ((m.timestamp % 1000) * 1_000_000) as u32;
+                if let Some(ndt) = chrono::NaiveDateTime::from_timestamp_opt(secs, nsecs) {
+                    let dt: chrono::DateTime<chrono::Utc> = chrono::DateTime::from_utc(ndt, chrono::Utc);
+                    dt.to_rfc3339()
+                } else {
+                    "invalid".to_string()
+                }
+            } else {
+                "missing".to_string()
+            };
 
             let ftype = FileType::from_bytes(&blob.bytes);
             let name = ftype.name();
 
             println!(
                 "Hash: {handle_str}\nTime: {}\nLength: {} bytes\nType: {}",
-                time.to_rfc3339(),
+                time_str,
                 length,
                 name
             );
             Ok(())
         }
         Command::Forget { url, handle } => {
-            use object_store::parse_url;
-            use object_store::ObjectStore;
-            use tribles::blob::schemas::UnknownBlob;
-            use tribles::value::schemas::hash::Blake3;
-            use tribles::value::schemas::hash::Handle;
-            use url::Url;
+
 
             let url = Url::parse(&url)?;
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let (store, path) = parse_url(&url)?;
             let hash_val = parse_blob_handle(&handle)?;
             let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash_val.into();
-            let blob_path = path.child("blobs").child(hex::encode(handle_val.raw));
-            remote.delete_raw(&blob_path)?;
+            let blob_handle = handle_val;
+            // forget is idempotent
+            remote.forget(blob_handle)?;
             Ok(())
         }
     }

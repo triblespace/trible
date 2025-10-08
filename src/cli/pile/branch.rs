@@ -13,6 +13,7 @@ use tribles::prelude::BranchStore;
 use ed25519_dalek::SigningKey;
 use std::env;
 use std::fs;
+use tribles::repo::BlobStoreMeta;
 
 fn load_signing_key(path_opt: &Option<PathBuf>) -> Result<SigningKey, anyhow::Error> {
     // Accept only a path to a file (via CLI flag or TRIBLES_SIGNING_KEY env var)
@@ -261,7 +262,7 @@ pub fn run(cmd: Command) -> Result<()> {
                 let reader = pile
                     .reader()
                     .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
-                let meta_present = reader.metadata(meta_handle).is_some();
+                let meta_present = reader.metadata(meta_handle)?.is_some();
                 let (name_val, head_val, head_err): (
                     Option<String>,
                     Option<Value<Handle<Blake3, SimpleArchive>>>,
@@ -311,7 +312,7 @@ pub fn run(cmd: Command) -> Result<()> {
                 if let Some(h) = head_val {
                     let head_hash: Value<Hash<Blake3>> = Handle::to_hash(h);
                     let head_hex: String = head_hash.from_value();
-                    let present = reader.metadata(h).is_some();
+                    let present = reader.metadata(h)?.is_some();
                     println!(
                         "Head:      blake3:{head_hex} [{}]",
                         if present { "present" } else { "missing" }
@@ -419,7 +420,7 @@ pub fn run(cmd: Command) -> Result<()> {
                     if let Some(h) = head_val {
                         let head_hash: Value<Hash<Blake3>> = Handle::to_hash(h);
                         let head_hex: String = head_hash.from_value();
-                        let present = reader.metadata(h).is_some();
+                        let present = reader.metadata(h)?.is_some();
                         println!(
                             "Meta blake3:{meta_hex}  Head blake3:{head_hex}  [{}]",
                             if present { "present" } else { "missing" }
@@ -571,7 +572,7 @@ pub fn run(cmd: Command) -> Result<()> {
                     .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
 
                 let mut head_opt: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
-                if reader.metadata(meta_handle).is_some() {
+                if reader.metadata(meta_handle)?.is_some() {
                     if let Ok(meta) =
                         reader.get::<TribleSet, SimpleArchive>(meta_handle)
                     {
@@ -603,7 +604,7 @@ pub fn run(cmd: Command) -> Result<()> {
                     }
                     commit_count += 1;
 
-                    if reader.metadata(h).is_none() {
+                    if reader.metadata(h)?.is_none() {
                         continue;
                     }
 
@@ -624,7 +625,7 @@ pub fn run(cmd: Command) -> Result<()> {
                     }
 
                     for c in content_handles {
-                        if reader.metadata(c).is_none() {
+                        if reader.metadata(c)?.is_none() {
                             continue;
                         }
                         let content: TribleSet = match
@@ -864,7 +865,7 @@ pub fn run(cmd: Command) -> Result<()> {
             for r in pile.branches()? {
                 let bid = r?;
                 if let Some(meta_handle) = pile.head(bid)? {
-                    if reader.metadata(meta_handle).is_some() {
+                    if reader.metadata(meta_handle)?.is_some() {
                         match reader.get::<TribleSet, SimpleArchive>(meta_handle) {
                             Ok(meta) => {
                                 let mut branch_name: Option<String> = None;

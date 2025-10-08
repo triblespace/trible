@@ -6,6 +6,7 @@ use std::path::PathBuf;
 // DEFAULT_MAX_PILE_SIZE removed; the new Pile API no longer uses a size const generic
 
 use crate::cli::util::parse_blob_handle;
+use tribles::repo::BlobStoreMeta;
 
 #[derive(Parser)]
 pub enum Command {
@@ -68,7 +69,8 @@ pub fn run(cmd: Command) -> Result<()> {
                     let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
                     let string: String = hash.from_value();
                     if metadata {
-                        if let Some(meta) = reader.metadata(handle) {
+                        let meta_opt = reader.metadata(handle)?;
+                        if let Some(meta) = meta_opt {
                             let dt = UNIX_EPOCH + Duration::from_millis(meta.timestamp);
                             let time: DateTime<Utc> = DateTime::<Utc>::from(dt);
                             println!("{}\t{}\t{}", string, time.to_rfc3339(), meta.length);
@@ -148,7 +150,7 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::blob::Blob;
             use tribles::prelude::BlobStore;
             use tribles::prelude::BlobStoreGet;
-            use tribles::repo::pile::BlobMetadata;
+            use tribles::repo::BlobMetadata;
             use tribles::repo::pile::Pile;
             use tribles::value::schemas::hash::Blake3;
             use tribles::value::schemas::hash::Handle;
@@ -162,9 +164,7 @@ pub fn run(cmd: Command) -> Result<()> {
                     .reader()
                     .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
                 let blob: Blob<UnknownBlob> = reader.get(handle_val)?;
-                let metadata: BlobMetadata = reader
-                    .metadata(handle_val)
-                    .ok_or_else(|| anyhow::anyhow!("blob not found"))?;
+                let metadata: BlobMetadata = reader.metadata(handle_val)?.ok_or_else(|| anyhow::anyhow!("blob not found"))?;
 
                 let dt = UNIX_EPOCH + Duration::from_millis(metadata.timestamp);
                 let time: DateTime<Utc> = DateTime::<Utc>::from(dt);
