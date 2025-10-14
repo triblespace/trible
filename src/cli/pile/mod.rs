@@ -139,11 +139,19 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                                 }
                                 match reader.metadata(h) {
                                     Ok(None) => {
-                                        return (count, Some(format!("commit blake3:{hex} missing")));
+                                        return (
+                                            count,
+                                            Some(format!("commit blake3:{hex} missing")),
+                                        );
                                     }
                                     Ok(Some(_)) => {}
                                     Err(e) => {
-                                        return (count, Some(format!("commit blake3:{hex} metadata error: {e:?}")));
+                                        return (
+                                            count,
+                                            Some(format!(
+                                                "commit blake3:{hex} metadata error: {e:?}"
+                                            )),
+                                        );
                                     }
                                 }
                                 let meta: TribleSet =
@@ -170,7 +178,12 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                                             }
                                             Ok(None) => {}
                                             Err(e) => {
-                                                return (count, Some(format!("commit blake3:{hex} metadata error: {e:?}")));
+                                                return (
+                                                    count,
+                                                    Some(format!(
+                                                        "commit blake3:{hex} metadata error: {e:?}"
+                                                    )),
+                                                );
                                             }
                                         }
                                     } else if t.a() == &repo_parent_attr {

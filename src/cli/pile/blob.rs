@@ -150,8 +150,8 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::blob::Blob;
             use tribles::prelude::BlobStore;
             use tribles::prelude::BlobStoreGet;
-            use tribles::repo::BlobMetadata;
             use tribles::repo::pile::Pile;
+            use tribles::repo::BlobMetadata;
             use tribles::value::schemas::hash::Blake3;
             use tribles::value::schemas::hash::Handle;
 
@@ -164,7 +164,9 @@ pub fn run(cmd: Command) -> Result<()> {
                     .reader()
                     .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
                 let blob: Blob<UnknownBlob> = reader.get(handle_val)?;
-                let metadata: BlobMetadata = reader.metadata(handle_val)?.ok_or_else(|| anyhow::anyhow!("blob not found"))?;
+                let metadata: BlobMetadata = reader
+                    .metadata(handle_val)?
+                    .ok_or_else(|| anyhow::anyhow!("blob not found"))?;
 
                 let dt = UNIX_EPOCH + Duration::from_millis(metadata.timestamp);
                 let time: DateTime<Utc> = DateTime::<Utc>::from(dt);

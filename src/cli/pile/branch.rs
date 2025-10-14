@@ -441,7 +441,12 @@ pub fn run(cmd: Command) -> Result<()> {
             let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
             res.and(close_res)?;
         }
-        Command::Export { from_pile, branch, to_pile, signing_key } => {
+        Command::Export {
+            from_pile,
+            branch,
+            to_pile,
+            signing_key,
+        } => {
             use tribles::prelude::blobschemas::SimpleArchive;
             use tribles::repo;
             use tribles::repo::pile::Pile;
@@ -458,14 +463,18 @@ pub fn run(cmd: Command) -> Result<()> {
             let mut dst: Pile<Blake3> = Pile::open(&to_pile)?;
 
             // Obtain the source branch metadata handle (root) and ensure it exists.
-            let src_meta = src.head(bid)?.ok_or_else(|| anyhow::anyhow!("source branch head not found"))?;
+            let src_meta = src
+                .head(bid)?
+                .ok_or_else(|| anyhow::anyhow!("source branch head not found"))?;
 
             // Prepare a mapping from source handle raw -> destination handle for later lookup.
             use std::collections::HashMap;
             use tribles::value::VALUE_LEN;
             let mut mapping: HashMap<[u8; VALUE_LEN], Value<Handle<Blake3, _>>> = HashMap::new();
 
-            let src_reader = src.reader().map_err(|e| anyhow::anyhow!("src pile reader error: {e:?}"))?;
+            let src_reader = src
+                .reader()
+                .map_err(|e| anyhow::anyhow!("src pile reader error: {e:?}"))?;
             let handles = repo::reachable(&src_reader, std::iter::once(src_meta.transmute()));
 
             let mut visited: usize = 0;
@@ -494,7 +503,10 @@ pub fn run(cmd: Command) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("destination branch update failed: {e:?}"))?;
             match res {
                 tribles::repo::PushResult::Success() => {
-                    println!("export: copied visited={} stored={} and set branch {:#X}", visited, stored, bid);
+                    println!(
+                        "export: copied visited={} stored={} and set branch {:#X}",
+                        visited, stored, bid
+                    );
                 }
                 tribles::repo::PushResult::Conflict(existing) => {
                     println!("export: copied visited={} stored={} but branch update conflicted: existing={:?}", visited, stored, existing);
@@ -573,9 +585,7 @@ pub fn run(cmd: Command) -> Result<()> {
 
                 let mut head_opt: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
                 if reader.metadata(meta_handle)?.is_some() {
-                    if let Ok(meta) =
-                        reader.get::<TribleSet, SimpleArchive>(meta_handle)
-                    {
+                    if let Ok(meta) = reader.get::<TribleSet, SimpleArchive>(meta_handle) {
                         let repo_head_attr: tribles::id::Id =
                             tribles::id_hex!("272FBC56108F336C4D2E17289468C35F");
                         for t in meta.iter() {
@@ -628,9 +638,7 @@ pub fn run(cmd: Command) -> Result<()> {
                         if reader.metadata(c)?.is_none() {
                             continue;
                         }
-                        let content: TribleSet = match
-                            reader.get::<TribleSet, SimpleArchive>(c)
-                        {
+                        let content: TribleSet = match reader.get::<TribleSet, SimpleArchive>(c) {
                             Ok(s) => s,
                             Err(_) => continue,
                         };

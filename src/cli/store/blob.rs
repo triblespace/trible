@@ -4,19 +4,19 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use crate::cli::util::parse_blob_handle;
+use chrono::{DateTime, NaiveDateTime, Utc};
+use object_store::parse_url;
+use tribles::blob::schemas::UnknownBlob;
+use tribles::blob::Bytes;
 use tribles::repo::objectstore::ObjectStoreRemote;
 use tribles::repo::BlobStore;
-use tribles::repo::BlobStoreList;
-use tribles::repo::BlobStoreGet;
 use tribles::repo::BlobStoreForget;
+use tribles::repo::BlobStoreGet;
+use tribles::repo::BlobStoreList;
+use tribles::repo::BlobStoreMeta;
 use tribles::value::schemas::hash::Blake3;
 use tribles::value::schemas::hash::Handle;
 use url::Url;
-use chrono::{NaiveDateTime, DateTime, Utc};
-use tribles::repo::BlobStoreMeta;
-use tribles::blob::schemas::UnknownBlob;
-use tribles::blob::Bytes;
-use object_store::parse_url;
 
 #[derive(Parser)]
 pub enum Command {
@@ -62,16 +62,19 @@ pub fn run(cmd: Command) -> Result<()> {
         Command::List { url } => {
             let url = Url::parse(&url)?;
 
-            
-// Prefer the repo-managed blob listing. Do not fall back to raw
+            // Prefer the repo-managed blob listing. Do not fall back to raw
             // listing automatically — bare files were a bug, not a feature.
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
-            let mut reader = remote.reader().map_err(|e| anyhow::anyhow!("remote reader error: {e:?}"))?;
+            let mut reader = remote
+                .reader()
+                .map_err(|e| anyhow::anyhow!("remote reader error: {e:?}"))?;
 
             for item_res in reader.blobs() {
                 match item_res {
                     Ok(handle_val) => {
-                        let hash: tribles::value::Value<tribles::value::schemas::hash::Hash<Blake3>> = Handle::to_hash(handle_val);
+                        let hash: tribles::value::Value<
+                            tribles::value::schemas::hash::Hash<Blake3>,
+                        > = Handle::to_hash(handle_val);
                         let string: String = hash.from_value();
                         println!("{}", string);
                     }
@@ -108,7 +111,6 @@ pub fn run(cmd: Command) -> Result<()> {
             use tribles::prelude::BlobStore;
             use tribles::prelude::BlobStoreGet;
 
-
             let url = Url::parse(&url)?;
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let hash_val = parse_blob_handle(&handle)?;
@@ -126,7 +128,6 @@ pub fn run(cmd: Command) -> Result<()> {
             use object_store::parse_url;
             use object_store::ObjectStore;
             use tribles::blob::Blob;
-
 
             let url = Url::parse(&url)?;
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
@@ -150,7 +151,8 @@ pub fn run(cmd: Command) -> Result<()> {
                 let secs = (m.timestamp / 1000) as i64;
                 let nsecs = ((m.timestamp % 1000) * 1_000_000) as u32;
                 if let Some(ndt) = chrono::NaiveDateTime::from_timestamp_opt(secs, nsecs) {
-                    let dt: chrono::DateTime<chrono::Utc> = chrono::DateTime::from_utc(ndt, chrono::Utc);
+                    let dt: chrono::DateTime<chrono::Utc> =
+                        chrono::DateTime::from_utc(ndt, chrono::Utc);
                     dt.to_rfc3339()
                 } else {
                     "invalid".to_string()
@@ -164,15 +166,11 @@ pub fn run(cmd: Command) -> Result<()> {
 
             println!(
                 "Hash: {handle_str}\nTime: {}\nLength: {} bytes\nType: {}",
-                time_str,
-                length,
-                name
+                time_str, length, name
             );
             Ok(())
         }
         Command::Forget { url, handle } => {
-
-
             let url = Url::parse(&url)?;
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let (store, path) = parse_url(&url)?;
