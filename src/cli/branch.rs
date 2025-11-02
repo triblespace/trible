@@ -4,9 +4,9 @@ use std::convert::TryInto;
 use std::path::PathBuf;
 
 // DEFAULT_MAX_PILE_SIZE removed; the new Pile API no longer uses a size const generic
-use tribles::prelude::BlobStore;
-use tribles::prelude::BlobStoreList;
-use tribles::prelude::BranchStore;
+use triblespace::prelude::BlobStore;
+use triblespace::prelude::BlobStoreList;
+use triblespace::prelude::BranchStore;
 
 #[derive(Parser)]
 pub enum BranchCommand {
@@ -33,11 +33,11 @@ pub enum BranchCommand {
 pub fn run(cmd: BranchCommand) -> Result<()> {
     match cmd {
         BranchCommand::Push { url, pile, branch } => {
-            use tribles::id::Id;
-            use tribles::repo;
-            use tribles::repo::objectstore::ObjectStoreRemote;
-            use tribles::repo::pile::Pile;
-            use tribles::value::schemas::hash::Blake3;
+            use triblespace::id::Id;
+            use triblespace::repo;
+            use triblespace::repo::objectstore::ObjectStoreRemote;
+            use triblespace::repo::pile::Pile;
+            use triblespace::value::schemas::hash::Blake3;
             use url::Url;
 
             let url = Url::parse(&url)?;
@@ -73,11 +73,11 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
             res.and(close_res)?;
         }
         BranchCommand::Pull { url, pile, branch } => {
-            use tribles::id::Id;
-            use tribles::repo;
-            use tribles::repo::objectstore::ObjectStoreRemote;
-            use tribles::repo::pile::Pile;
-            use tribles::value::schemas::hash::Blake3;
+            use triblespace::id::Id;
+            use triblespace::repo;
+            use triblespace::repo::objectstore::ObjectStoreRemote;
+            use triblespace::repo::pile::Pile;
+            use triblespace::value::schemas::hash::Blake3;
             use url::Url;
 
             let url = Url::parse(&url)?;

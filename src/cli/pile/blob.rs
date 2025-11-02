@@ -6,7 +6,7 @@ use std::path::PathBuf;
 // DEFAULT_MAX_PILE_SIZE removed; the new Pile API no longer uses a size const generic
 
 use crate::cli::util::parse_blob_handle;
-use tribles::repo::BlobStoreMeta;
+use triblespace::repo::BlobStoreMeta;
 
 #[derive(Parser)]
 pub enum Command {
@@ -51,13 +51,13 @@ pub fn run(cmd: Command) -> Result<()> {
             use std::time::Duration;
             use std::time::UNIX_EPOCH;
 
-            use tribles::blob::schemas::UnknownBlob;
-            use tribles::prelude::BlobStore;
-            use tribles::prelude::BlobStoreList;
-            use tribles::repo::pile::Pile;
-            use tribles::value::schemas::hash::Blake3;
-            use tribles::value::schemas::hash::Handle;
-            use tribles::value::schemas::hash::Hash;
+            use triblespace::blob::schemas::UnknownBlob;
+            use triblespace::prelude::BlobStore;
+            use triblespace::prelude::BlobStoreList;
+            use triblespace::repo::pile::Pile;
+            use triblespace::value::schemas::hash::Blake3;
+            use triblespace::value::schemas::hash::Handle;
+            use triblespace::value::schemas::hash::Hash;
 
             let mut pile: Pile<Blake3> = Pile::open(&path)?;
             let res = (|| -> Result<(), anyhow::Error> {
@@ -65,8 +65,8 @@ pub fn run(cmd: Command) -> Result<()> {
                     .reader()
                     .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
                 for handle in reader.blobs() {
-                    let handle: tribles::value::Value<Handle<Blake3, UnknownBlob>> = handle?;
-                    let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
+                    let handle: triblespace::value::Value<Handle<Blake3, UnknownBlob>> = handle?;
+                    let hash: triblespace::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
                     let string: String = hash.from_value();
                     if metadata {
                         let meta_opt = reader.metadata(handle)?;
@@ -87,20 +87,20 @@ pub fn run(cmd: Command) -> Result<()> {
             res.and(close_res)?;
         }
         Command::Put { pile, file } => {
-            use tribles::blob::schemas::UnknownBlob;
-            use tribles::blob::Bytes;
-            use tribles::prelude::BlobStorePut;
-            use tribles::repo::pile::Pile;
-            use tribles::value::schemas::hash::Blake3;
-            use tribles::value::schemas::hash::Handle;
-            use tribles::value::schemas::hash::Hash;
+            use triblespace::blob::schemas::UnknownBlob;
+            use triblespace::blob::Bytes;
+            use triblespace::prelude::BlobStorePut;
+            use triblespace::repo::pile::Pile;
+            use triblespace::value::schemas::hash::Blake3;
+            use triblespace::value::schemas::hash::Handle;
+            use triblespace::value::schemas::hash::Hash;
 
             let mut pile: Pile<Blake3> = Pile::open(&pile)?;
             let res = (|| -> Result<(), anyhow::Error> {
                 let file_handle = File::open(&file)?;
                 let bytes = unsafe { Bytes::map_file(&file_handle)? };
                 let handle = pile.put::<UnknownBlob, _>(bytes)?;
-                let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
+                let hash: triblespace::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
                 let string: String = hash.from_value();
                 println!("{string}");
                 Ok(())
@@ -115,18 +115,18 @@ pub fn run(cmd: Command) -> Result<()> {
         } => {
             use std::io::Write;
 
-            use tribles::blob::schemas::UnknownBlob;
-            use tribles::blob::Bytes;
-            use tribles::prelude::BlobStore;
-            use tribles::prelude::BlobStoreGet;
-            use tribles::repo::pile::Pile;
-            use tribles::value::schemas::hash::Blake3;
-            use tribles::value::schemas::hash::Handle;
+            use triblespace::blob::schemas::UnknownBlob;
+            use triblespace::blob::Bytes;
+            use triblespace::prelude::BlobStore;
+            use triblespace::prelude::BlobStoreGet;
+            use triblespace::repo::pile::Pile;
+            use triblespace::value::schemas::hash::Blake3;
+            use triblespace::value::schemas::hash::Handle;
 
             let mut pile: Pile<Blake3> = Pile::open(&pile)?;
             let res = (|| -> Result<(), anyhow::Error> {
                 let hash_val = parse_blob_handle(&handle)?;
-                let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
+                let handle_val: triblespace::value::Value<Handle<Blake3, UnknownBlob>> =
                     hash_val.into();
                 let reader = pile
                     .reader()
@@ -146,19 +146,19 @@ pub fn run(cmd: Command) -> Result<()> {
             use std::time::Duration;
             use std::time::UNIX_EPOCH;
 
-            use tribles::blob::schemas::UnknownBlob;
-            use tribles::blob::Blob;
-            use tribles::prelude::BlobStore;
-            use tribles::prelude::BlobStoreGet;
-            use tribles::repo::pile::Pile;
-            use tribles::repo::BlobMetadata;
-            use tribles::value::schemas::hash::Blake3;
-            use tribles::value::schemas::hash::Handle;
+            use triblespace::blob::schemas::UnknownBlob;
+            use triblespace::blob::Blob;
+            use triblespace::prelude::BlobStore;
+            use triblespace::prelude::BlobStoreGet;
+            use triblespace::repo::pile::Pile;
+            use triblespace::repo::BlobMetadata;
+            use triblespace::value::schemas::hash::Blake3;
+            use triblespace::value::schemas::hash::Handle;
 
             let mut pile: Pile<Blake3> = Pile::open(&pile)?;
             let res = (|| -> Result<(), anyhow::Error> {
                 let hash_val = parse_blob_handle(&handle)?;
-                let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> =
+                let handle_val: triblespace::value::Value<Handle<Blake3, UnknownBlob>> =
                     hash_val.into();
                 let reader = pile
                     .reader()

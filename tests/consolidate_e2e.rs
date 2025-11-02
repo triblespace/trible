@@ -4,15 +4,16 @@ use rand::rngs::OsRng;
 use std::collections::HashSet;
 use std::convert::TryInto;
 use tempfile::tempdir;
-use tribles::metadata;
-use tribles::prelude::blobschemas::SimpleArchive;
-use tribles::prelude::*;
-use tribles::repo::pile::Pile;
-use tribles::repo::Repository;
-use tribles::trible::TribleSet;
-use tribles::value::schemas::hash::Blake3;
-use tribles::value::schemas::hash::Handle;
-use tribles::value::Value;
+use triblespace::id::id_hex;
+use triblespace::metadata;
+use triblespace::prelude::blobschemas::SimpleArchive;
+use triblespace::prelude::*;
+use triblespace::repo::pile::Pile;
+use triblespace::repo::Repository;
+use triblespace::trible::TribleSet;
+use triblespace::value::schemas::hash::Blake3;
+use triblespace::value::schemas::hash::Handle;
+use triblespace::value::Value;
 
 /// End-to-end test: create multiple branches with the same name, run the
 /// consolidate command and verify the resulting merge commit parents match
@@ -41,7 +42,7 @@ fn consolidate_merges_branch_heads() {
             assert!(res.is_none(), "unexpected push conflict");
 
             let head = ws.head().expect("head present");
-            let hh: Value<tribles::value::schemas::hash::Hash<Blake3>> = Handle::to_hash(head);
+            let hh: Value<triblespace::value::schemas::hash::Hash<Blake3>> = Handle::to_hash(head);
             original_heads.push(hh.from_value());
         }
         // repo drops here and flushes
@@ -89,15 +90,15 @@ fn consolidate_merges_branch_heads() {
     pile.refresh().unwrap();
     let raw = hex::decode(id_hex).unwrap();
     let raw16: [u8; 16] = raw.as_slice().try_into().unwrap();
-    let bid = tribles::id::Id::new(raw16).unwrap();
+    let bid = triblespace::id::Id::new(raw16).unwrap();
 
     let reader = pile.reader().unwrap();
     let meta_handle = pile.head(bid).unwrap().expect("new branch metadata");
     let meta: TribleSet = reader.get(meta_handle).unwrap();
 
     // repo head attribute id
-    let repo_head_attr: tribles::id::Id = tribles::id_hex!("272FBC56108F336C4D2E17289468C35F");
-    let repo_parent_attr: tribles::id::Id = tribles::id_hex!("317044B612C690000D798CA660ECFD2A");
+    let repo_head_attr: triblespace::id::Id = id_hex!("272FBC56108F336C4D2E17289468C35F");
+    let repo_parent_attr: triblespace::id::Id = id_hex!("317044B612C690000D798CA660ECFD2A");
 
     // extract the commit handle for the branch head
     let mut head_handle_opt: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
@@ -117,7 +118,7 @@ fn consolidate_merges_branch_heads() {
     for t in commit_meta.iter() {
         if t.a() == &repo_parent_attr {
             let p = *t.v::<Handle<Blake3, SimpleArchive>>();
-            let hh: Value<tribles::value::schemas::hash::Hash<Blake3>> = Handle::to_hash(p);
+            let hh: Value<triblespace::value::schemas::hash::Hash<Blake3>> = Handle::to_hash(p);
             parents.insert(hh.from_value());
         }
     }

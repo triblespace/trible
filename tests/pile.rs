@@ -3,12 +3,12 @@ use ed25519_dalek::SigningKey;
 use predicates::prelude::*;
 use rand::rngs::OsRng;
 use tempfile::tempdir;
-use tribles::prelude::BlobStore;
-use tribles::prelude::BlobStoreList;
-use tribles::prelude::BranchStore;
-use tribles::repo::pile::Pile;
-use tribles::repo::Repository;
-use tribles::value::schemas::hash::Blake3;
+use triblespace::prelude::BlobStore;
+use triblespace::prelude::BlobStoreList;
+use triblespace::prelude::BranchStore;
+use triblespace::repo::pile::Pile;
+use triblespace::repo::Repository;
+use triblespace::value::schemas::hash::Blake3;
 
 #[test]
 fn list_branches_outputs_branch_id() {
@@ -271,10 +271,10 @@ fn diagnose_reports_invalid_hash() {
 
 #[test]
 fn inspect_outputs_tribles() {
-    use tribles::examples;
-    use tribles::prelude::blobschemas::SimpleArchive;
-    use tribles::prelude::*;
-    use tribles::value::schemas::hash::Handle;
+    use triblespace::examples;
+    use triblespace::prelude::blobschemas::SimpleArchive;
+    use triblespace::prelude::*;
+    use triblespace::value::schemas::hash::Handle;
 
     let dir = tempdir().unwrap();
     let pile_path = dir.path().join("inspect.pile");

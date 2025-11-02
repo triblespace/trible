@@ -6,16 +6,16 @@ use std::path::PathBuf;
 use crate::cli::util::parse_blob_handle;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use object_store::parse_url;
-use tribles::blob::schemas::UnknownBlob;
-use tribles::blob::Bytes;
-use tribles::repo::objectstore::ObjectStoreRemote;
-use tribles::repo::BlobStore;
-use tribles::repo::BlobStoreForget;
-use tribles::repo::BlobStoreGet;
-use tribles::repo::BlobStoreList;
-use tribles::repo::BlobStoreMeta;
-use tribles::value::schemas::hash::Blake3;
-use tribles::value::schemas::hash::Handle;
+use triblespace::blob::schemas::UnknownBlob;
+use triblespace::blob::Bytes;
+use triblespace::repo::objectstore::ObjectStoreRemote;
+use triblespace::repo::BlobStore;
+use triblespace::repo::BlobStoreForget;
+use triblespace::repo::BlobStoreGet;
+use triblespace::repo::BlobStoreList;
+use triblespace::repo::BlobStoreMeta;
+use triblespace::value::schemas::hash::Blake3;
+use triblespace::value::schemas::hash::Handle;
 use url::Url;
 
 #[derive(Parser)]
@@ -72,8 +72,8 @@ pub fn run(cmd: Command) -> Result<()> {
             for item_res in reader.blobs() {
                 match item_res {
                     Ok(handle_val) => {
-                        let hash: tribles::value::Value<
-                            tribles::value::schemas::hash::Hash<Blake3>,
+                        let hash: triblespace::value::Value<
+                            triblespace::value::schemas::hash::Hash<Blake3>,
                         > = Handle::to_hash(handle_val);
                         let string: String = hash.from_value();
                         println!("{}", string);
@@ -85,18 +85,18 @@ pub fn run(cmd: Command) -> Result<()> {
             Ok(())
         }
         Command::Put { url, file } => {
-            use tribles::blob::schemas::UnknownBlob;
-            use tribles::blob::Bytes;
-            use tribles::prelude::BlobStorePut;
+            use triblespace::blob::schemas::UnknownBlob;
+            use triblespace::blob::Bytes;
+            use triblespace::prelude::BlobStorePut;
 
-            use tribles::value::schemas::hash::Hash;
+            use triblespace::value::schemas::hash::Hash;
 
             let url = Url::parse(&url)?;
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let file_handle = File::open(&file)?;
             let bytes = unsafe { Bytes::map_file(&file_handle)? };
             let handle = remote.put::<UnknownBlob, _>(bytes)?;
-            let hash: tribles::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
+            let hash: triblespace::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
             let string: String = hash.from_value();
             println!("{string}");
             Ok(())
@@ -108,13 +108,14 @@ pub fn run(cmd: Command) -> Result<()> {
         } => {
             use std::io::Write;
 
-            use tribles::prelude::BlobStore;
-            use tribles::prelude::BlobStoreGet;
+            use triblespace::prelude::BlobStore;
+            use triblespace::prelude::BlobStoreGet;
 
             let url = Url::parse(&url)?;
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let hash_val = parse_blob_handle(&handle)?;
-            let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash_val.into();
+            let handle_val: triblespace::value::Value<Handle<Blake3, UnknownBlob>> =
+                hash_val.into();
             let reader = remote
                 .reader()
                 .map_err(|e| anyhow::anyhow!("remote reader error: {e:?}"))?;
@@ -127,12 +128,13 @@ pub fn run(cmd: Command) -> Result<()> {
             use file_type::FileType;
             use object_store::parse_url;
             use object_store::ObjectStore;
-            use tribles::blob::Blob;
+            use triblespace::blob::Blob;
 
             let url = Url::parse(&url)?;
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let hash_val = parse_blob_handle(&handle)?;
-            let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash_val.into();
+            let handle_val: triblespace::value::Value<Handle<Blake3, UnknownBlob>> =
+                hash_val.into();
             let handle_str: String = hash_val.clone().from_value();
             let reader = remote
                 .reader()
@@ -175,7 +177,8 @@ pub fn run(cmd: Command) -> Result<()> {
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let (store, path) = parse_url(&url)?;
             let hash_val = parse_blob_handle(&handle)?;
-            let handle_val: tribles::value::Value<Handle<Blake3, UnknownBlob>> = hash_val.into();
+            let handle_val: triblespace::value::Value<Handle<Blake3, UnknownBlob>> =
+                hash_val.into();
             let blob_handle = handle_val;
             // forget is idempotent
             remote.forget(blob_handle)?;

@@ -3,9 +3,9 @@ use ed25519_dalek::SigningKey;
 use predicates::prelude::*;
 use rand::rngs::OsRng;
 use tempfile::tempdir;
-use tribles::repo::pile::Pile;
-use tribles::repo::Repository;
-use tribles::value::schemas::hash::Blake3;
+use triblespace::repo::pile::Pile;
+use triblespace::repo::Repository;
+use triblespace::value::schemas::hash::Blake3;
 
 #[test]
 fn store_blob_list_outputs_file() {
