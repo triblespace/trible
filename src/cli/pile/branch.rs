@@ -6,15 +6,15 @@ use std::path::PathBuf;
 
 // DEFAULT_MAX_PILE_SIZE removed; the new Pile API no longer uses a size const generic
 
-use triblespace::id::id_hex;
 use triblespace::prelude::BlobStore;
 use triblespace::prelude::BlobStoreGet;
 use triblespace::prelude::BranchStore;
+use triblespace_core::id::id_hex;
 
 use ed25519_dalek::SigningKey;
 use std::env;
 use std::fs;
-use triblespace::repo::BlobStoreMeta;
+use triblespace_core::repo::BlobStoreMeta;
 
 fn load_signing_key(path_opt: &Option<PathBuf>) -> Result<SigningKey, anyhow::Error> {
     // Accept only a path to a file (via CLI flag or TRIBLES_SIGNING_KEY env var)
@@ -168,8 +168,8 @@ pub enum Command {
 pub fn run(cmd: Command) -> Result<()> {
     match cmd {
         Command::List { path } => {
-            use triblespace::repo::pile::Pile;
-            use triblespace::value::schemas::hash::Blake3;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::value::schemas::hash::Blake3;
 
             let mut pile: Pile<Blake3> = Pile::open(&path)?;
             let res = (|| -> Result<(), anyhow::Error> {
@@ -191,9 +191,9 @@ pub fn run(cmd: Command) -> Result<()> {
             name,
             signing_key,
         } => {
-            use triblespace::repo::pile::Pile;
-            use triblespace::repo::Repository;
-            use triblespace::value::schemas::hash::Blake3;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::repo::Repository;
+            use triblespace_core::value::schemas::hash::Blake3;
             let pile: Pile<Blake3> = Pile::open(&pile)?;
             let key = load_signing_key(&signing_key)?;
             let mut repo = Repository::new(pile, key);
@@ -207,15 +207,15 @@ pub fn run(cmd: Command) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("{e:?}"))?;
         }
         Command::Inspect { pile, id, name } => {
-            use triblespace::id::Id;
             use triblespace::prelude::blobschemas::SimpleArchive;
             use triblespace::prelude::valueschemas::Handle;
+            use triblespace_core::id::Id;
 
-            use triblespace::repo::pile::Pile;
-            use triblespace::trible::TribleSet;
-            use triblespace::value::schemas::hash::Blake3;
-            use triblespace::value::schemas::hash::Hash;
-            use triblespace::value::Value;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::trible::TribleSet;
+            use triblespace_core::value::schemas::hash::Blake3;
+            use triblespace_core::value::schemas::hash::Hash;
+            use triblespace_core::value::Value;
 
             let mut pile: Pile<Blake3> = Pile::open(&pile)?;
             let res = (|| -> Result<(), anyhow::Error> {
@@ -236,9 +236,9 @@ pub fn run(cmd: Command) -> Result<()> {
                                 .get::<TribleSet, SimpleArchive>(meta_handle)
                                 .map_err(|e| anyhow::anyhow!("{e:?}"))?;
                             for t in meta.iter() {
-                                if t.a() == &triblespace::metadata::ATTR_NAME {
+                                if t.a() == &triblespace_core::metadata::ATTR_NAME {
                                     let n: Value<
-                                        triblespace::value::schemas::shortstring::ShortString,
+                                        triblespace_core::value::schemas::shortstring::ShortString,
                                     > = *t.v();
                                     let nstr: String = n.from_value();
                                     if nstr == name {
@@ -273,12 +273,12 @@ pub fn run(cmd: Command) -> Result<()> {
                         Ok(meta) => {
                             let mut name_val: Option<String> = None;
                             let mut head_val: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
-                            let repo_head_attr: triblespace::id::Id =
+                            let repo_head_attr: triblespace_core::id::Id =
                                 id_hex!("272FBC56108F336C4D2E17289468C35F");
                             for t in meta.iter() {
-                                if t.a() == &triblespace::metadata::ATTR_NAME {
+                                if t.a() == &triblespace_core::metadata::ATTR_NAME {
                                     let n: Value<
-                                        triblespace::value::schemas::shortstring::ShortString,
+                                        triblespace_core::value::schemas::shortstring::ShortString,
                                     > = *t.v();
                                     name_val = Some(n.from_value());
                                 } else if t.a() == &repo_head_attr {
@@ -330,16 +330,16 @@ pub fn run(cmd: Command) -> Result<()> {
             name,
             limit,
         } => {
-            use triblespace::blob::schemas::UnknownBlob;
-            use triblespace::id::Id;
             use triblespace::prelude::blobschemas::SimpleArchive;
             use triblespace::prelude::valueschemas::Handle;
+            use triblespace_core::blob::schemas::UnknownBlob;
+            use triblespace_core::id::Id;
 
-            use triblespace::repo::pile::Pile;
-            use triblespace::trible::TribleSet;
-            use triblespace::value::schemas::hash::Blake3;
-            use triblespace::value::schemas::hash::Hash;
-            use triblespace::value::Value;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::trible::TribleSet;
+            use triblespace_core::value::schemas::hash::Blake3;
+            use triblespace_core::value::schemas::hash::Hash;
+            use triblespace_core::value::Value;
 
             let mut pile: Pile<Blake3> = Pile::open(&pile)?;
             let res = (|| -> Result<(), anyhow::Error> {
@@ -363,9 +363,9 @@ pub fn run(cmd: Command) -> Result<()> {
                                 .get::<TribleSet, SimpleArchive>(meta_handle)
                                 .map_err(|e| anyhow::anyhow!("{e:?}"))?;
                             for t in meta.iter() {
-                                if t.a() == &triblespace::metadata::ATTR_NAME {
+                                if t.a() == &triblespace_core::metadata::ATTR_NAME {
                                     let n: Value<
-                                        triblespace::value::schemas::shortstring::ShortString,
+                                        triblespace_core::value::schemas::shortstring::ShortString,
                                     > = *t.v();
                                     let nstr: String = n.from_value();
                                     if nstr == name {
@@ -384,9 +384,9 @@ pub fn run(cmd: Command) -> Result<()> {
                     anyhow::bail!("provide either --id HEX or --name NAME");
                 };
 
-                let repo_branch_attr: triblespace::id::Id =
+                let repo_branch_attr: triblespace_core::id::Id =
                     id_hex!("8694CC73AF96A5E1C7635C677D1B928A");
-                let repo_head_attr: triblespace::id::Id =
+                let repo_head_attr: triblespace_core::id::Id =
                     id_hex!("272FBC56108F336C4D2E17289468C35F");
 
                 let mut printed = 0usize;
@@ -404,7 +404,7 @@ pub fn run(cmd: Command) -> Result<()> {
                     for t in meta.iter() {
                         if t.a() == &repo_branch_attr {
                             let v: Value<triblespace::prelude::valueschemas::GenId> = *t.v();
-                            if let Ok(id) = v.try_from_value::<triblespace::id::Id>() {
+                            if let Ok(id) = v.try_from_value::<triblespace_core::id::Id>() {
                                 if id == branch_id {
                                     is_meta_for_branch = true;
                                 }
@@ -449,16 +449,17 @@ pub fn run(cmd: Command) -> Result<()> {
             signing_key,
         } => {
             use triblespace::prelude::blobschemas::SimpleArchive;
-            use triblespace::repo;
-            use triblespace::repo::pile::Pile;
-            use triblespace::value::schemas::hash::Blake3;
-            use triblespace::value::schemas::hash::Handle;
-            use triblespace::value::Value;
+            use triblespace_core::repo;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::value::schemas::hash::Blake3;
+            use triblespace_core::value::schemas::hash::Handle;
+            use triblespace_core::value::Value;
 
             // Parse branch id hex
             let raw = hex::decode(branch)?;
             let raw: [u8; 16] = raw.as_slice().try_into()?;
-            let bid = triblespace::id::Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?;
+            let bid =
+                triblespace_core::id::Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?;
 
             let mut src: Pile<Blake3> = Pile::open(&from_pile)?;
             let mut dst: Pile<Blake3> = Pile::open(&to_pile)?;
@@ -470,7 +471,7 @@ pub fn run(cmd: Command) -> Result<()> {
 
             // Prepare a mapping from source handle raw -> destination handle for later lookup.
             use std::collections::HashMap;
-            use triblespace::value::VALUE_LEN;
+            use triblespace_core::value::VALUE_LEN;
             let mut mapping: HashMap<[u8; VALUE_LEN], Value<Handle<Blake3, _>>> = HashMap::new();
 
             let src_reader = src
@@ -503,13 +504,13 @@ pub fn run(cmd: Command) -> Result<()> {
                 .update(bid, old, dst_meta.transmute())
                 .map_err(|e| anyhow::anyhow!("destination branch update failed: {e:?}"))?;
             match res {
-                triblespace::repo::PushResult::Success() => {
+                triblespace_core::repo::PushResult::Success() => {
                     println!(
                         "export: copied visited={} stored={} and set branch {:#X}",
                         visited, stored, bid
                     );
                 }
-                triblespace::repo::PushResult::Conflict(existing) => {
+                triblespace_core::repo::PushResult::Conflict(existing) => {
                     println!("export: copied visited={} stored={} but branch update conflicted: existing={:?}", visited, stored, existing);
                 }
             }
@@ -520,15 +521,15 @@ pub fn run(cmd: Command) -> Result<()> {
         }
         Command::Stats { pile, id, name } => {
             use std::collections::{BTreeSet, HashSet};
-            use triblespace::id::Id;
             use triblespace::prelude::blobschemas::SimpleArchive;
             use triblespace::prelude::valueschemas::Handle;
+            use triblespace_core::id::Id;
 
-            use triblespace::repo::pile::Pile;
-            use triblespace::trible::TribleSet;
-            use triblespace::value::schemas::hash::Blake3;
-            use triblespace::value::schemas::hash::Hash;
-            use triblespace::value::Value;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::trible::TribleSet;
+            use triblespace_core::value::schemas::hash::Blake3;
+            use triblespace_core::value::schemas::hash::Hash;
+            use triblespace_core::value::Value;
 
             let mut pile: Pile<Blake3> = Pile::open(&pile)?;
             let res = (|| -> Result<(), anyhow::Error> {
@@ -552,9 +553,9 @@ pub fn run(cmd: Command) -> Result<()> {
                                 .get::<TribleSet, SimpleArchive>(meta_handle)
                                 .map_err(|e| anyhow::anyhow!("{e:?}"))?;
                             for t in meta.iter() {
-                                if t.a() == &triblespace::metadata::ATTR_NAME {
+                                if t.a() == &triblespace_core::metadata::ATTR_NAME {
                                     let n: Value<
-                                        triblespace::value::schemas::shortstring::ShortString,
+                                        triblespace_core::value::schemas::shortstring::ShortString,
                                     > = *t.v();
                                     let nstr: String = n.from_value();
                                     if nstr == name {
@@ -574,9 +575,9 @@ pub fn run(cmd: Command) -> Result<()> {
                 };
 
                 // Traversal attributes
-                let repo_parent_attr: triblespace::id::Id =
+                let repo_parent_attr: triblespace_core::id::Id =
                     id_hex!("317044B612C690000D798CA660ECFD2A");
-                let repo_content_attr: triblespace::id::Id =
+                let repo_content_attr: triblespace_core::id::Id =
                     id_hex!("4DD4DDD05CC31734B03ABB4E43188B1F");
 
                 // Resolve branch head
@@ -587,7 +588,7 @@ pub fn run(cmd: Command) -> Result<()> {
                 let mut head_opt: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
                 if reader.metadata(meta_handle)?.is_some() {
                     if let Ok(meta) = reader.get::<TribleSet, SimpleArchive>(meta_handle) {
-                        let repo_head_attr: triblespace::id::Id =
+                        let repo_head_attr: triblespace_core::id::Id =
                             id_hex!("272FBC56108F336C4D2E17289468C35F");
                         for t in meta.iter() {
                             if t.a() == &repo_head_attr {
@@ -683,23 +684,24 @@ pub fn run(cmd: Command) -> Result<()> {
             signing_key,
         } => {
             use triblespace::prelude::blobschemas::SimpleArchive;
-            use triblespace::repo;
-            use triblespace::repo::pile::Pile;
-            use triblespace::repo::Repository;
-            use triblespace::value::schemas::hash::Blake3;
-            use triblespace::value::schemas::hash::Handle;
-            use triblespace::value::Value;
+            use triblespace_core::repo;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::repo::Repository;
+            use triblespace_core::value::schemas::hash::Blake3;
+            use triblespace_core::value::schemas::hash::Handle;
+            use triblespace_core::value::Value;
 
             fn resolve_branch_id(
                 pile: &mut Pile<Blake3>,
                 id_hex: &Option<String>,
                 name_opt: &Option<String>,
-            ) -> anyhow::Result<triblespace::id::Id> {
-                use triblespace::trible::TribleSet;
+            ) -> anyhow::Result<triblespace_core::id::Id> {
+                use triblespace_core::trible::TribleSet;
                 if let Some(h) = id_hex {
                     let raw = hex::decode(h)?;
                     let raw: [u8; 16] = raw.as_slice().try_into()?;
-                    return triblespace::id::Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"));
+                    return triblespace_core::id::Id::new(raw)
+                        .ok_or_else(|| anyhow::anyhow!("bad id"));
                 }
                 let name = name_opt
                     .clone()
@@ -713,9 +715,9 @@ pub fn run(cmd: Command) -> Result<()> {
                     if let Some(meta_handle) = pile.head(bid)? {
                         if let Ok(meta) = reader.get::<TribleSet, SimpleArchive>(meta_handle) {
                             for t in meta.iter() {
-                                if t.a() == &triblespace::metadata::ATTR_NAME {
-                                    let n: triblespace::value::Value<
-                                        triblespace::value::schemas::shortstring::ShortString,
+                                if t.a() == &triblespace_core::metadata::ATTR_NAME {
+                                    let n: triblespace_core::value::Value<
+                                        triblespace_core::value::schemas::shortstring::ShortString,
                                     > = *t.v();
                                     if n.from_value::<String>() == name {
                                         return Ok(bid);
@@ -728,7 +730,7 @@ pub fn run(cmd: Command) -> Result<()> {
                 anyhow::bail!("branch not found: {name}")
             }
 
-            use triblespace::id::Id;
+            use triblespace_core::id::Id;
 
             let mut src: Pile<Blake3> = Pile::open(&from_pile)?;
             let mut dst: Pile<Blake3> = Pile::open(&to_pile)?;
@@ -842,15 +844,15 @@ pub fn run(cmd: Command) -> Result<()> {
             signing_key,
         } => {
             use triblespace::prelude::blobschemas::SimpleArchive;
-            use triblespace::repo::pile::Pile;
-            use triblespace::repo::Repository;
-            use triblespace::trible::TribleSet;
-            use triblespace::value::schemas::hash::Blake3;
-            use triblespace::value::schemas::hash::Handle;
-            use triblespace::value::Value;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::repo::Repository;
+            use triblespace_core::trible::TribleSet;
+            use triblespace_core::value::schemas::hash::Blake3;
+            use triblespace_core::value::schemas::hash::Handle;
+            use triblespace_core::value::Value;
             // Trait imports required for method resolution
-            use triblespace::blob::ToBlob;
             use triblespace::prelude::BlobStorePut;
+            use triblespace_core::blob::ToBlob;
 
             let mut pile: Pile<Blake3> = Pile::open(&pile)?;
 
@@ -862,12 +864,13 @@ pub fn run(cmd: Command) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
 
             // Attribute ids used in branch metadata
-            let name_attr = triblespace::metadata::ATTR_NAME;
-            let repo_head_attr: triblespace::id::Id = id_hex!("272FBC56108F336C4D2E17289468C35F");
+            let name_attr = triblespace_core::metadata::ATTR_NAME;
+            let repo_head_attr: triblespace_core::id::Id =
+                id_hex!("272FBC56108F336C4D2E17289468C35F");
 
             // Collect all branch ids whose metadata name matches `name`.
             let mut candidates: Vec<(
-                triblespace::id::Id,
+                triblespace_core::id::Id,
                 Option<Value<Handle<Blake3, SimpleArchive>>>,
             )> = Vec::new();
             for r in pile.branches()? {
@@ -882,7 +885,7 @@ pub fn run(cmd: Command) -> Result<()> {
                                 for t in meta.iter() {
                                     if t.a() == &name_attr {
                                         let n: Value<
-                                            triblespace::value::schemas::shortstring::ShortString,
+                                            triblespace_core::value::schemas::shortstring::ShortString,
                                         > = *t.v();
                                         branch_name = Some(n.from_value());
                                     } else if t.a() == &repo_head_attr {
@@ -913,7 +916,7 @@ pub fn run(cmd: Command) -> Result<()> {
             for (bid, head) in &candidates {
                 let id_hex = format!("{bid:X}");
                 if let Some(h) = head {
-                    let hh: Value<triblespace::value::schemas::hash::Hash<Blake3>> =
+                    let hh: Value<triblespace_core::value::schemas::hash::Hash<Blake3>> =
                         Handle::to_hash(*h);
                     let hex: String = hh.from_value();
                     println!("- {id_hex} -> commit blake3:{hex}");
@@ -945,7 +948,7 @@ pub fn run(cmd: Command) -> Result<()> {
 
             // Create a single merge commit that has all branch heads as parents.
             let signing_key = load_signing_key(&signing_key)?;
-            let commit_set = triblespace::repo::commit::commit_metadata(
+            let commit_set = triblespace_core::repo::commit::commit_metadata(
                 &signing_key,
                 parents.clone(),
                 None,

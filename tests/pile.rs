@@ -6,9 +6,9 @@ use tempfile::tempdir;
 use triblespace::prelude::BlobStore;
 use triblespace::prelude::BlobStoreList;
 use triblespace::prelude::BranchStore;
-use triblespace::repo::pile::Pile;
-use triblespace::repo::Repository;
-use triblespace::value::schemas::hash::Blake3;
+use triblespace_core::repo::pile::Pile;
+use triblespace_core::repo::Repository;
+use triblespace_core::value::schemas::hash::Blake3;
 
 #[test]
 fn list_branches_outputs_branch_id() {
@@ -274,7 +274,7 @@ fn inspect_outputs_tribles() {
     use triblespace::examples;
     use triblespace::prelude::blobschemas::SimpleArchive;
     use triblespace::prelude::*;
-    use triblespace::value::schemas::hash::Handle;
+    use triblespace_core::value::schemas::hash::Handle;
 
     let dir = tempdir().unwrap();
     let pile_path = dir.path().join("inspect.pile");

@@ -6,16 +6,16 @@ use std::path::PathBuf;
 use crate::cli::util::parse_blob_handle;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use object_store::parse_url;
-use triblespace::blob::schemas::UnknownBlob;
-use triblespace::blob::Bytes;
-use triblespace::repo::objectstore::ObjectStoreRemote;
-use triblespace::repo::BlobStore;
-use triblespace::repo::BlobStoreForget;
-use triblespace::repo::BlobStoreGet;
-use triblespace::repo::BlobStoreList;
-use triblespace::repo::BlobStoreMeta;
-use triblespace::value::schemas::hash::Blake3;
-use triblespace::value::schemas::hash::Handle;
+use triblespace_core::blob::schemas::UnknownBlob;
+use triblespace_core::blob::Bytes;
+use triblespace_core::repo::objectstore::ObjectStoreRemote;
+use triblespace_core::repo::BlobStore;
+use triblespace_core::repo::BlobStoreForget;
+use triblespace_core::repo::BlobStoreGet;
+use triblespace_core::repo::BlobStoreList;
+use triblespace_core::repo::BlobStoreMeta;
+use triblespace_core::value::schemas::hash::Blake3;
+use triblespace_core::value::schemas::hash::Handle;
 use url::Url;
 
 #[derive(Parser)]
@@ -72,8 +72,8 @@ pub fn run(cmd: Command) -> Result<()> {
             for item_res in reader.blobs() {
                 match item_res {
                     Ok(handle_val) => {
-                        let hash: triblespace::value::Value<
-                            triblespace::value::schemas::hash::Hash<Blake3>,
+                        let hash: triblespace_core::value::Value<
+                            triblespace_core::value::schemas::hash::Hash<Blake3>,
                         > = Handle::to_hash(handle_val);
                         let string: String = hash.from_value();
                         println!("{}", string);
@@ -85,18 +85,18 @@ pub fn run(cmd: Command) -> Result<()> {
             Ok(())
         }
         Command::Put { url, file } => {
-            use triblespace::blob::schemas::UnknownBlob;
-            use triblespace::blob::Bytes;
             use triblespace::prelude::BlobStorePut;
+            use triblespace_core::blob::schemas::UnknownBlob;
+            use triblespace_core::blob::Bytes;
 
-            use triblespace::value::schemas::hash::Hash;
+            use triblespace_core::value::schemas::hash::Hash;
 
             let url = Url::parse(&url)?;
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let file_handle = File::open(&file)?;
             let bytes = unsafe { Bytes::map_file(&file_handle)? };
             let handle = remote.put::<UnknownBlob, _>(bytes)?;
-            let hash: triblespace::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
+            let hash: triblespace_core::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
             let string: String = hash.from_value();
             println!("{string}");
             Ok(())
@@ -114,7 +114,7 @@ pub fn run(cmd: Command) -> Result<()> {
             let url = Url::parse(&url)?;
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let hash_val = parse_blob_handle(&handle)?;
-            let handle_val: triblespace::value::Value<Handle<Blake3, UnknownBlob>> =
+            let handle_val: triblespace_core::value::Value<Handle<Blake3, UnknownBlob>> =
                 hash_val.into();
             let reader = remote
                 .reader()
@@ -128,12 +128,12 @@ pub fn run(cmd: Command) -> Result<()> {
             use file_type::FileType;
             use object_store::parse_url;
             use object_store::ObjectStore;
-            use triblespace::blob::Blob;
+            use triblespace_core::blob::Blob;
 
             let url = Url::parse(&url)?;
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let hash_val = parse_blob_handle(&handle)?;
-            let handle_val: triblespace::value::Value<Handle<Blake3, UnknownBlob>> =
+            let handle_val: triblespace_core::value::Value<Handle<Blake3, UnknownBlob>> =
                 hash_val.into();
             let handle_str: String = hash_val.clone().from_value();
             let reader = remote
@@ -177,7 +177,7 @@ pub fn run(cmd: Command) -> Result<()> {
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let (store, path) = parse_url(&url)?;
             let hash_val = parse_blob_handle(&handle)?;
-            let handle_val: triblespace::value::Value<Handle<Blake3, UnknownBlob>> =
+            let handle_val: triblespace_core::value::Value<Handle<Blake3, UnknownBlob>> =
                 hash_val.into();
             let blob_handle = handle_val;
             // forget is idempotent

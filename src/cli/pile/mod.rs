@@ -5,11 +5,11 @@ use std::path::PathBuf;
 
 // DEFAULT_MAX_PILE_SIZE no longer required for the updated Pile API
 
-use triblespace::id::id_hex;
 use triblespace::prelude::BlobStore;
 use triblespace::prelude::BlobStoreGet;
 use triblespace::prelude::BranchStore;
-use triblespace::repo::BlobStoreMeta;
+use triblespace_core::id::id_hex;
+use triblespace_core::repo::BlobStoreMeta;
 
 pub mod blob;
 pub mod branch;
@@ -49,8 +49,8 @@ pub fn run(cmd: PileCommand) -> Result<()> {
         PileCommand::Branch { cmd } => branch::run(cmd),
         PileCommand::Blob { cmd } => blob::run(cmd),
         PileCommand::Create { path } => {
-            use triblespace::repo::pile::Pile;
-            use triblespace::value::schemas::hash::Blake3;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::value::schemas::hash::Blake3;
 
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
@@ -63,13 +63,13 @@ pub fn run(cmd: PileCommand) -> Result<()> {
         PileCommand::Diagnose { pile, fail_fast } => {
             use triblespace::prelude::blobschemas::SimpleArchive;
 
-            use triblespace::repo::pile::Pile;
-            use triblespace::repo::pile::ReadError;
-            use triblespace::trible::TribleSet;
-            use triblespace::value::schemas::hash::Blake3;
-            use triblespace::value::schemas::hash::Handle;
-            use triblespace::value::schemas::hash::Hash;
-            use triblespace::value::Value;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::repo::pile::ReadError;
+            use triblespace_core::trible::TribleSet;
+            use triblespace_core::value::schemas::hash::Blake3;
+            use triblespace_core::value::schemas::hash::Handle;
+            use triblespace_core::value::schemas::hash::Hash;
+            use triblespace_core::value::Value;
 
             match Pile::<Blake3>::open(&pile) {
                 Ok(mut pile) => {
@@ -84,7 +84,7 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                             match item {
                                 Ok((handle, blob)) => {
                                     total += 1;
-                                    let expected: triblespace::value::Value<Hash<Blake3>> =
+                                    let expected: triblespace_core::value::Value<Hash<Blake3>> =
                                         Handle::to_hash(handle);
                                     let computed = Hash::<Blake3>::digest(&blob.bytes);
                                     if expected != computed {
@@ -113,20 +113,20 @@ pub fn run(cmd: PileCommand) -> Result<()> {
 
                         // Branch integrity diagnostics
                         println!("\nBranches:");
-                        let _repo_branch_attr: triblespace::id::Id =
+                        let _repo_branch_attr: triblespace_core::id::Id =
                             id_hex!("8694CC73AF96A5E1C7635C677D1B928A");
-                        let repo_head_attr: triblespace::id::Id =
+                        let repo_head_attr: triblespace_core::id::Id =
                             id_hex!("272FBC56108F336C4D2E17289468C35F");
-                        let repo_parent_attr: triblespace::id::Id =
+                        let repo_parent_attr: triblespace_core::id::Id =
                             id_hex!("317044B612C690000D798CA660ECFD2A");
-                        let repo_content_attr: triblespace::id::Id =
+                        let repo_content_attr: triblespace_core::id::Id =
                             id_hex!("4DD4DDD05CC31734B03ABB4E43188B1F");
 
                         fn verify_chain(
-                            reader: &triblespace::repo::pile::PileReader<Blake3>,
+                            reader: &triblespace_core::repo::pile::PileReader<Blake3>,
                             start: Value<Handle<Blake3, SimpleArchive>>,
-                            repo_parent_attr: triblespace::id::Id,
-                            repo_content_attr: triblespace::id::Id,
+                            repo_parent_attr: triblespace_core::id::Id,
+                            repo_content_attr: triblespace_core::id::Id,
                         ) -> (usize, Option<String>) {
                             use std::collections::BTreeSet;
                             let mut visited: BTreeSet<String> = BTreeSet::new();
@@ -230,9 +230,11 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                                         match reader.get::<TribleSet, SimpleArchive>(meta_handle) {
                                             Ok(meta) => {
                                                 for t in meta.iter() {
-                                                    if t.a() == &triblespace::metadata::ATTR_NAME {
+                                                    if t.a()
+                                                        == &triblespace_core::metadata::ATTR_NAME
+                                                    {
                                                         let n: Value<
-                                                            triblespace::value::schemas::shortstring::ShortString,
+                                                            triblespace_core::value::schemas::shortstring::ShortString,
                                                         > = *t.v();
                                                         name_val = Some(n.from_value());
                                                     } else if t.a() == &repo_head_attr {

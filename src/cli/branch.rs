@@ -33,11 +33,11 @@ pub enum BranchCommand {
 pub fn run(cmd: BranchCommand) -> Result<()> {
     match cmd {
         BranchCommand::Push { url, pile, branch } => {
-            use triblespace::id::Id;
-            use triblespace::repo;
-            use triblespace::repo::objectstore::ObjectStoreRemote;
-            use triblespace::repo::pile::Pile;
-            use triblespace::value::schemas::hash::Blake3;
+            use triblespace_core::id::Id;
+            use triblespace_core::repo;
+            use triblespace_core::repo::objectstore::ObjectStoreRemote;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::value::schemas::hash::Blake3;
             use url::Url;
 
             let url = Url::parse(&url)?;
@@ -73,11 +73,11 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
             res.and(close_res)?;
         }
         BranchCommand::Pull { url, pile, branch } => {
-            use triblespace::id::Id;
-            use triblespace::repo;
-            use triblespace::repo::objectstore::ObjectStoreRemote;
-            use triblespace::repo::pile::Pile;
-            use triblespace::value::schemas::hash::Blake3;
+            use triblespace_core::id::Id;
+            use triblespace_core::repo;
+            use triblespace_core::repo::objectstore::ObjectStoreRemote;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::value::schemas::hash::Blake3;
             use url::Url;
 
             let url = Url::parse(&url)?;
