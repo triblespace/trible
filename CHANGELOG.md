@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 ### Added
 - Initial changelog with Let's Changelog format.
+- `pile merge` command to merge source branch heads into a target branch.
 - Integration tests for `genid` and `pile list-branches` commands.
 - `pile create` command to initialize new pile files.
 - Note that `touch` on Unix can also create an empty pile file.
@@ -37,6 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Test ensuring `pile blob list` outputs the exact handle for ingested blobs.
 - Optional metadata output for `pile blob list`.
 ### Changed
+- Updated consolidate E2E test commits to pass optional metadata explicitly.
 - Renamed `id-gen` command to `genid` to align with the GenID schema.
 - Expanded `AGENTS.md` with sections from the Tribles project and a dedicated
   inventory subsection.

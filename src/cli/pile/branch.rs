@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::Parser;
-use rand::rngs::OsRng;
 use std::convert::TryInto;
 use std::path::PathBuf;
 
@@ -11,42 +10,8 @@ use triblespace::prelude::BlobStoreGet;
 use triblespace::prelude::BranchStore;
 use triblespace_core::id::id_hex;
 
-use ed25519_dalek::SigningKey;
-use std::env;
-use std::fs;
+use super::signing::load_signing_key;
 use triblespace_core::repo::BlobStoreMeta;
-
-fn load_signing_key(path_opt: &Option<PathBuf>) -> Result<SigningKey, anyhow::Error> {
-    // Accept only a path to a file (via CLI flag or TRIBLES_SIGNING_KEY env var)
-    // containing a 64-char hex seed. If the path is absent, generate an
-    // ephemeral signing key.
-    let key_path_opt: Option<PathBuf> = if let Some(p) = path_opt {
-        Some(p.clone())
-    } else if let Ok(s) = env::var("TRIBLES_SIGNING_KEY") {
-        Some(PathBuf::from(s))
-    } else {
-        None
-    };
-
-    if let Some(p) = key_path_opt {
-        let content = fs::read_to_string(&p)
-            .map_err(|e| anyhow::anyhow!("failed to read signing key: {e}"))?;
-        let hexstr = content.trim();
-        if hexstr.len() != 64 || !hexstr.chars().all(|c| c.is_ascii_hexdigit()) {
-            anyhow::bail!(
-                "signing key file {} does not contain valid 64-char hex",
-                p.display()
-            );
-        }
-        let bytes = hex::decode(hexstr)
-            .map_err(|e| anyhow::anyhow!("invalid hex in signing key file: {e}"))?;
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&bytes);
-        return Ok(SigningKey::from_bytes(&arr));
-    }
-
-    Ok(SigningKey::generate(&mut OsRng))
-}
 
 #[derive(Parser)]
 pub enum Command {
@@ -953,13 +918,11 @@ pub fn run(cmd: Command) -> Result<()> {
                 parents.clone(),
                 None,
                 None,
+                None,
             );
             let commit_blob = commit_set.to_blob();
 
             // Store the commit blob in the pile before creating the branch.
-            let commit_handle = pile
-                .put(commit_blob)
-                .map_err(|e| anyhow::anyhow!("failed to put commit blob: {e:?}"))?;
 
             // Decide output branch name
             let out = out_name.unwrap_or_else(|| format!("{name}-consolidated"));
@@ -967,7 +930,9 @@ pub fn run(cmd: Command) -> Result<()> {
             // Move the pile into a Repository so we can atomically create the branch.
             let mut repo = Repository::new(pile, signing_key.clone());
             let new_id = *repo
-                .create_branch_with_key(&out, Some(commit_handle), signing_key)
+                .create_branch_with_key(&out, Some((pile
+                .put(commit_blob)
+                .map_err(|e| anyhow::anyhow!("failed to put commit blob: {e:?}"))?)), signing_key)
                 .map_err(|e| anyhow::anyhow!("failed to create consolidated branch: {e:?}"))?;
 
             repo.into_storage()

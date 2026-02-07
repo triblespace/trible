@@ -9,6 +9,7 @@
 - Allow specifying a custom maximum pile size when creating piles.
 - Consolidate shared blob-handling logic across pile and store commands.
 - Centralize branch ID resolution helpers across CLI commands.
+- Add CLI coverage for `pile merge` in the integration test suite.
 
 ## Discovered Issues
 - Object store operations rely on an async runtime; consider synchronous alternatives.

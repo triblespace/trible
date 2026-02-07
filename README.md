@@ -62,10 +62,11 @@ Run `trible <COMMAND>` to invoke a subcommand.
 
 - `pile branch list <PILE>` — list branch identifiers.
 - `pile branch create <PILE> <NAME>` — create a new branch.
- - `pile branch consolidate <PILE> <NAME>` — consolidate multiple branches that share the same logical name into a single new branch. The command creates a single merge commit whose parents are the matching branch heads and prints the new branch id.
+- `pile branch consolidate <PILE> <NAME>` — consolidate multiple branches that share the same logical name into a single new branch. The command creates a single merge commit whose parents are the matching branch heads and prints the new branch id.
+- `pile merge <PILE> <TARGET> <SOURCE...>` — merge source branch heads into a target branch by creating merge-only commits. Branch references can be names or hex ids.
 
 Signing key format
- - Commands that create commits (e.g. `create`, `merge-import`, `consolidate`) accept a signing key file path via the `--signing-key` flag. The file must contain a single 64-character hex string (32 bytes encoded as hex). You can also set TRIBLES_SIGNING_KEY to the path of such a file. Generated keys (when created by Codex tooling) are written as hex text to the configured path.
+- Commands that create commits (e.g. `create`, `merge`, `merge-import`, `consolidate`) accept a signing key file path via the `--signing-key` flag. The file must contain a single 64-character hex string (32 bytes encoded as hex). You can also set TRIBLES_SIGNING_KEY to the path of such a file. Generated keys (when created by Codex tooling) are written as hex text to the configured path.
 
 #### Blobs
 

@@ -29,7 +29,7 @@ clap_complete = "4.5.55"
 anyhow = "1.0.80"
 rand = "0.8.5"
 hex = "0.4.3"
-triblespace = { path = "../tribles-rust" }
+triblespace = { path = "../triblespace-rs" }
 file_type = "=0.8.7"
 chrono = "0.4"
 object_store = { version = "0.12", default-features = false, features = ["aws", "fs"] }

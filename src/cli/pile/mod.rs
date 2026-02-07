@@ -13,6 +13,8 @@ use triblespace_core::repo::BlobStoreMeta;
 
 pub mod blob;
 pub mod branch;
+mod merge;
+mod signing;
 
 #[derive(Parser)]
 pub enum PileCommand {
@@ -25,6 +27,19 @@ pub enum PileCommand {
     Blob {
         #[command(subcommand)]
         cmd: blob::Command,
+    },
+    /// Merge source branch heads into a target branch.
+    Merge {
+        /// Path to the pile file to modify
+        pile: PathBuf,
+        /// Target branch name or id (hex)
+        target: String,
+        /// Source branch name(s) or id(s) (hex)
+        #[arg(num_args = 1..)]
+        sources: Vec<String>,
+        /// Optional signing key path. The file should contain a 64-char hex seed.
+        #[arg(long)]
+        signing_key: Option<PathBuf>,
     },
     /// Create a new empty pile file.
     ///
@@ -48,6 +63,12 @@ pub fn run(cmd: PileCommand) -> Result<()> {
     match cmd {
         PileCommand::Branch { cmd } => branch::run(cmd),
         PileCommand::Blob { cmd } => blob::run(cmd),
+        PileCommand::Merge {
+            pile,
+            target,
+            sources,
+            signing_key,
+        } => merge::run(pile, target, sources, signing_key),
         PileCommand::Create { path } => {
             use triblespace_core::repo::pile::Pile;
             use triblespace_core::value::schemas::hash::Blake3;

@@ -284,7 +284,7 @@ fn inspect_outputs_tribles() {
 
     {
         let mut pile: Pile<Blake3> = Pile::open(&pile_path).unwrap();
-        let handle = pile.put::<SimpleArchive, _>(blob).unwrap();
+        let handle = pile.put(blob).unwrap();
         pile.flush().unwrap();
 
         let hash = Handle::to_hash(handle);
