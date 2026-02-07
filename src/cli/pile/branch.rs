@@ -8,10 +8,21 @@ use std::path::PathBuf;
 use triblespace::prelude::BlobStore;
 use triblespace::prelude::BlobStoreGet;
 use triblespace::prelude::BranchStore;
+use triblespace::prelude::View;
+use triblespace_core::blob::schemas::longstring::LongString;
+use triblespace_core::blob::schemas::simplearchive::SimpleArchive;
+use triblespace_core::blob::ToBlob;
 use triblespace_core::id::id_hex;
+use triblespace_core::id::Id;
+use triblespace_core::repo::pile::{Pile, PileReader};
+use triblespace_core::trible::TribleSet;
+use triblespace_core::value::schemas::hash::{Blake3, Handle};
+use triblespace_core::value::Value;
 
 use super::signing::load_signing_key;
 use triblespace_core::repo::BlobStoreMeta;
+
+type BranchNameHandle = Value<Handle<Blake3, LongString>>;
 
 #[derive(Parser)]
 pub enum Command {
@@ -192,32 +203,7 @@ pub fn run(cmd: Command) -> Result<()> {
                     let reader = pile
                         .reader()
                         .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
-                    let mut found: Option<Id> = None;
-                    let iter = pile.branches()?;
-                    for r in iter {
-                        let bid = r?;
-                        if let Some(meta_handle) = pile.head(bid)? {
-                            let meta: TribleSet = reader
-                                .get::<TribleSet, SimpleArchive>(meta_handle)
-                                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-                            for t in meta.iter() {
-                                if t.a() == &triblespace_core::metadata::ATTR_NAME {
-                                    let n: Value<
-                                        triblespace_core::value::schemas::shortstring::ShortString,
-                                    > = *t.v();
-                                    let nstr: String = n.from_value();
-                                    if nstr == name {
-                                        found = Some(bid);
-                                        break;
-                                    }
-                                }
-                            }
-                            if found.is_some() {
-                                break;
-                            }
-                        }
-                    }
-                    found.ok_or_else(|| anyhow::anyhow!("branch named not found"))?
+                    find_branch_by_name(&mut pile, &reader, &name)?
                 } else {
                     anyhow::bail!("provide either --id HEX or --name NAME");
                 };
@@ -236,21 +222,16 @@ pub fn run(cmd: Command) -> Result<()> {
                 ) = if meta_present {
                     match reader.get::<TribleSet, SimpleArchive>(meta_handle) {
                         Ok(meta) => {
-                            let mut name_val: Option<String> = None;
                             let mut head_val: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
                             let repo_head_attr: triblespace_core::id::Id =
                                 id_hex!("272FBC56108F336C4D2E17289468C35F");
                             for t in meta.iter() {
-                                if t.a() == &triblespace_core::metadata::ATTR_NAME {
-                                    let n: Value<
-                                        triblespace_core::value::schemas::shortstring::ShortString,
-                                    > = *t.v();
-                                    name_val = Some(n.from_value());
-                                } else if t.a() == &repo_head_attr {
+                                if t.a() == &repo_head_attr {
                                     let h = *t.v::<Handle<Blake3, SimpleArchive>>();
                                     head_val = Some(h);
                                 }
                             }
+                            let name_val = load_branch_name(&reader, &meta)?;
                             (name_val, head_val, None)
                         }
                         Err(e) => (None, None, Some(format!("decode failed: {e:?}"))),
@@ -319,32 +300,7 @@ pub fn run(cmd: Command) -> Result<()> {
                     let raw: [u8; 16] = raw.as_slice().try_into()?;
                     Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?
                 } else if let Some(name) = name {
-                    let mut found: Option<Id> = None;
-                    let iter = pile.branches()?;
-                    for r in iter {
-                        let bid = r?;
-                        if let Some(meta_handle) = pile.head(bid)? {
-                            let meta: TribleSet = reader
-                                .get::<TribleSet, SimpleArchive>(meta_handle)
-                                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-                            for t in meta.iter() {
-                                if t.a() == &triblespace_core::metadata::ATTR_NAME {
-                                    let n: Value<
-                                        triblespace_core::value::schemas::shortstring::ShortString,
-                                    > = *t.v();
-                                    let nstr: String = n.from_value();
-                                    if nstr == name {
-                                        found = Some(bid);
-                                        break;
-                                    }
-                                }
-                            }
-                            if found.is_some() {
-                                break;
-                            }
-                        }
-                    }
-                    found.ok_or_else(|| anyhow::anyhow!("branch named not found"))?
+                    find_branch_by_name(&mut pile, &reader, &name)?
                 } else {
                     anyhow::bail!("provide either --id HEX or --name NAME");
                 };
@@ -509,32 +465,7 @@ pub fn run(cmd: Command) -> Result<()> {
                     let raw: [u8; 16] = raw.as_slice().try_into()?;
                     Id::new(raw).ok_or_else(|| anyhow::anyhow!("bad id"))?
                 } else if let Some(name) = name {
-                    let mut found: Option<Id> = None;
-                    let iter = pile.branches()?;
-                    for r in iter {
-                        let bid = r?;
-                        if let Some(meta_handle) = pile.head(bid)? {
-                            let meta: TribleSet = reader
-                                .get::<TribleSet, SimpleArchive>(meta_handle)
-                                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-                            for t in meta.iter() {
-                                if t.a() == &triblespace_core::metadata::ATTR_NAME {
-                                    let n: Value<
-                                        triblespace_core::value::schemas::shortstring::ShortString,
-                                    > = *t.v();
-                                    let nstr: String = n.from_value();
-                                    if nstr == name {
-                                        found = Some(bid);
-                                        break;
-                                    }
-                                }
-                            }
-                            if found.is_some() {
-                                break;
-                            }
-                        }
-                    }
-                    found.ok_or_else(|| anyhow::anyhow!("branch named not found"))?
+                    find_branch_by_name(&mut pile, &reader, &name)?
                 } else {
                     anyhow::bail!("provide either --id HEX or --name NAME");
                 };
@@ -674,25 +605,7 @@ pub fn run(cmd: Command) -> Result<()> {
                 let reader = pile
                     .reader()
                     .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
-                let iter = pile.branches()?;
-                for r in iter {
-                    let bid = r?;
-                    if let Some(meta_handle) = pile.head(bid)? {
-                        if let Ok(meta) = reader.get::<TribleSet, SimpleArchive>(meta_handle) {
-                            for t in meta.iter() {
-                                if t.a() == &triblespace_core::metadata::ATTR_NAME {
-                                    let n: triblespace_core::value::Value<
-                                        triblespace_core::value::schemas::shortstring::ShortString,
-                                    > = *t.v();
-                                    if n.from_value::<String>() == name {
-                                        return Ok(bid);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                anyhow::bail!("branch not found: {name}")
+                find_branch_by_name(pile, &reader, &name)
             }
 
             use triblespace_core::id::Id;
@@ -829,9 +742,10 @@ pub fn run(cmd: Command) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
 
             // Attribute ids used in branch metadata
-            let name_attr = triblespace_core::metadata::ATTR_NAME;
+            let name_attr = triblespace_core::metadata::name.id();
             let repo_head_attr: triblespace_core::id::Id =
                 id_hex!("272FBC56108F336C4D2E17289468C35F");
+            let wanted_name = branch_name_handle(&name);
 
             // Collect all branch ids whose metadata name matches `name`.
             let mut candidates: Vec<(
@@ -844,23 +758,21 @@ pub fn run(cmd: Command) -> Result<()> {
                     if reader.metadata(meta_handle)?.is_some() {
                         match reader.get::<TribleSet, SimpleArchive>(meta_handle) {
                             Ok(meta) => {
-                                let mut branch_name: Option<String> = None;
                                 let mut head_val: Option<Value<Handle<Blake3, SimpleArchive>>> =
                                     None;
+                                let mut matches = false;
                                 for t in meta.iter() {
                                     if t.a() == &name_attr {
-                                        let n: Value<
-                                            triblespace_core::value::schemas::shortstring::ShortString,
-                                        > = *t.v();
-                                        branch_name = Some(n.from_value());
+                                        let h: BranchNameHandle = *t.v();
+                                        if h == wanted_name {
+                                            matches = true;
+                                        }
                                     } else if t.a() == &repo_head_attr {
                                         head_val = Some(*t.v::<Handle<Blake3, SimpleArchive>>());
                                     }
                                 }
-                                if let Some(n) = branch_name {
-                                    if n == name {
-                                        candidates.push((bid, head_val));
-                                    }
+                                if matches {
+                                    candidates.push((bid, head_val));
                                 }
                             }
                             Err(_) => {
@@ -922,17 +834,18 @@ pub fn run(cmd: Command) -> Result<()> {
             );
             let commit_blob = commit_set.to_blob();
 
-            // Store the commit blob in the pile before creating the branch.
-
             // Decide output branch name
             let out = out_name.unwrap_or_else(|| format!("{name}-consolidated"));
+
+            // Store the commit blob in the pile before creating the branch.
+            let commit_handle = pile
+                .put(commit_blob)
+                .map_err(|e| anyhow::anyhow!("failed to put commit blob: {e:?}"))?;
 
             // Move the pile into a Repository so we can atomically create the branch.
             let mut repo = Repository::new(pile, signing_key.clone());
             let new_id = *repo
-                .create_branch_with_key(&out, Some((pile
-                .put(commit_blob)
-                .map_err(|e| anyhow::anyhow!("failed to put commit blob: {e:?}"))?)), signing_key)
+                .create_branch_with_key(&out, Some(commit_handle), signing_key)
                 .map_err(|e| anyhow::anyhow!("failed to create consolidated branch: {e:?}"))?;
 
             repo.into_storage()
@@ -943,6 +856,62 @@ pub fn run(cmd: Command) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn branch_name_handle(name: &str) -> BranchNameHandle {
+    name.to_owned().to_blob().get_handle::<Blake3>()
+}
+
+fn find_branch_by_name(
+    pile: &mut Pile<Blake3>,
+    reader: &PileReader<Blake3>,
+    name: &str,
+) -> Result<Id> {
+    let wanted = branch_name_handle(name);
+    let name_attr = triblespace_core::metadata::name.id();
+    for r in pile.branches()? {
+        let bid = r?;
+        let Some(meta_handle) = pile.head(bid)? else {
+            continue;
+        };
+        let Ok(meta) = reader.get::<TribleSet, SimpleArchive>(meta_handle) else {
+            continue;
+        };
+        for t in meta.iter() {
+            if t.a() == &name_attr {
+                let h: BranchNameHandle = *t.v();
+                if h == wanted {
+                    return Ok(bid);
+                }
+            }
+        }
+    }
+    anyhow::bail!("branch not found: {name}")
+}
+
+fn load_branch_name(
+    reader: &impl BlobStoreGet<Blake3>,
+    meta: &TribleSet,
+) -> Result<Option<String>> {
+    let name_attr = triblespace_core::metadata::name.id();
+    let mut handle_opt: Option<BranchNameHandle> = None;
+    for t in meta.iter() {
+        if t.a() == &name_attr {
+            let h: BranchNameHandle = *t.v();
+            if handle_opt.replace(h).is_some() {
+                return Ok(None);
+            }
+        }
+    }
+
+    let Some(handle) = handle_opt else {
+        return Ok(None);
+    };
+
+    let view: View<str> = reader
+        .get(handle)
+        .map_err(|err| anyhow::anyhow!("read branch name blob: {err:?}"))?;
+    Ok(Some(view.as_ref().to_string()))
 }
 
 #[cfg(test)]

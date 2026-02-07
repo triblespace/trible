@@ -30,6 +30,7 @@ anyhow = "1.0.80"
 rand = "0.8.5"
 hex = "0.4.3"
 triblespace = { path = "../triblespace-rs" }
+triblespace-core = { path = "../triblespace-rs/triblespace-core" }
 file_type = "=0.8.7"
 chrono = "0.4"
 object_store = { version = "0.12", default-features = false, features = ["aws", "fs"] }

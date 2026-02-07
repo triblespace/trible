@@ -271,9 +271,9 @@ fn diagnose_reports_invalid_hash() {
 
 #[test]
 fn inspect_outputs_tribles() {
-    use triblespace::examples;
     use triblespace::prelude::blobschemas::SimpleArchive;
     use triblespace::prelude::*;
+    use triblespace_core::examples;
     use triblespace_core::value::schemas::hash::Handle;
 
     let dir = tempdir().unwrap();

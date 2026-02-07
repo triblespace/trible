@@ -89,8 +89,8 @@ pub fn run(cmd: Command) -> Result<()> {
             res.and(close_res)?;
         }
         Command::Put { pile, file } => {
+            use triblespace::prelude::blobschemas::FileBytes;
             use triblespace::prelude::BlobStorePut;
-            use triblespace_core::blob::schemas::UnknownBlob;
             use triblespace_core::blob::Bytes;
             use triblespace_core::repo::pile::Pile;
             use triblespace_core::value::schemas::hash::Blake3;
@@ -101,7 +101,7 @@ pub fn run(cmd: Command) -> Result<()> {
             let res = (|| -> Result<(), anyhow::Error> {
                 let file_handle = File::open(&file)?;
                 let bytes = unsafe { Bytes::map_file(&file_handle)? };
-                let handle = pile.put(bytes)?;
+                let handle = pile.put::<FileBytes, _>(bytes)?;
                 let hash: triblespace_core::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
                 let string: String = hash.from_value();
                 println!("{string}");

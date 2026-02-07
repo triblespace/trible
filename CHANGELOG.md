@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `pile diagnose` command to check pile integrity.
 - `pile diagnose` now verifies that all blob hashes match.
 - `pile diagnose` now exits with a nonzero code when corruption is detected.
+- `pile migrate` command to apply idempotent pile metadata migrations.
+- `pile migrate ... branch-metadata-name` migration to upgrade legacy branch-name metadata to `metadata::name` (LongString handle).
 - `store blob list` command to enumerate object store contents.
 - `store blob put` command to upload files to object stores.
 - `store blob forget` command to remove objects from object stores.

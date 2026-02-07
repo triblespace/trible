@@ -34,7 +34,8 @@ fn consolidate_merges_branch_heads() {
             let mut ws = repo.pull(*branch_id).expect("pull");
             let e = ufoid();
             let mut content = TribleSet::new();
-            content += entity! { &e @ metadata::name: format!("branch-{i}") };
+            let label = ws.put::<blobschemas::LongString, _>(format!("branch-{i}"));
+            content += entity! { &e @ metadata::name: label };
             ws.commit(content, None, Some(&format!("commit-{i}")));
 
             // Push and assert no conflict

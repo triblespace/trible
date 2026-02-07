@@ -85,8 +85,8 @@ pub fn run(cmd: Command) -> Result<()> {
             Ok(())
         }
         Command::Put { url, file } => {
+            use triblespace::prelude::blobschemas::FileBytes;
             use triblespace::prelude::BlobStorePut;
-            use triblespace_core::blob::schemas::UnknownBlob;
             use triblespace_core::blob::Bytes;
 
             use triblespace_core::value::schemas::hash::Hash;
@@ -95,7 +95,7 @@ pub fn run(cmd: Command) -> Result<()> {
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
             let file_handle = File::open(&file)?;
             let bytes = unsafe { Bytes::map_file(&file_handle)? };
-            let handle = remote.put(bytes)?;
+            let handle = remote.put::<FileBytes, _>(bytes)?;
             let hash: triblespace_core::value::Value<Hash<Blake3>> = Handle::to_hash(handle);
             let string: String = hash.from_value();
             println!("{string}");

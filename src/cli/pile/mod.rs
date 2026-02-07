@@ -14,6 +14,7 @@ use triblespace_core::repo::BlobStoreMeta;
 pub mod blob;
 pub mod branch;
 mod merge;
+mod migrate;
 mod signing;
 
 #[derive(Parser)]
@@ -57,6 +58,13 @@ pub enum PileCommand {
         #[arg(long)]
         fail_fast: bool,
     },
+    /// Migrate legacy pile metadata to the current schemas.
+    Migrate {
+        /// Path to the pile file to modify
+        pile: PathBuf,
+        #[command(subcommand)]
+        cmd: migrate::Command,
+    },
 }
 
 pub fn run(cmd: PileCommand) -> Result<()> {
@@ -82,7 +90,7 @@ pub fn run(cmd: PileCommand) -> Result<()> {
             Ok(())
         }
         PileCommand::Diagnose { pile, fail_fast } => {
-            use triblespace::prelude::blobschemas::SimpleArchive;
+            use triblespace::prelude::blobschemas::{LongString, SimpleArchive};
 
             use triblespace_core::repo::pile::Pile;
             use triblespace_core::repo::pile::ReadError;
@@ -247,17 +255,23 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                                     let mut head_val: Option<Value<Handle<Blake3, SimpleArchive>>> =
                                         None;
                                     let mut meta_err: Option<String> = None;
+                                    let name_attr = triblespace_core::metadata::name.id();
                                     if meta_present {
                                         match reader.get::<TribleSet, SimpleArchive>(meta_handle) {
                                             Ok(meta) => {
                                                 for t in meta.iter() {
-                                                    if t.a()
-                                                        == &triblespace_core::metadata::ATTR_NAME
-                                                    {
-                                                        let n: Value<
-                                                            triblespace_core::value::schemas::shortstring::ShortString,
-                                                        > = *t.v();
-                                                        name_val = Some(n.from_value());
+                                                    if t.a() == &name_attr {
+                                                        let h: Value<Handle<Blake3, LongString>> =
+                                                            *t.v();
+                                                        if let Ok(view) = reader
+                                                            .get::<triblespace::prelude::View<
+                                                            str,
+                                                        >, _>(
+                                                            h
+                                                        ) {
+                                                            name_val =
+                                                                Some(view.as_ref().to_string());
+                                                        }
                                                     } else if t.a() == &repo_head_attr {
                                                         head_val = Some(*t.v::<Handle<
                                                             Blake3,
@@ -338,5 +352,6 @@ pub fn run(cmd: PileCommand) -> Result<()> {
             }
             Ok(())
         }
+        PileCommand::Migrate { pile, cmd } => migrate::run(pile, cmd),
     }
 }

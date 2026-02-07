@@ -57,6 +57,14 @@ Run `trible <COMMAND>` to invoke a subcommand.
 
 - `pile create <PATH>` — initialize an empty pile, creating parent directories as needed.
 - `pile diagnose <PILE>` — verify pile integrity.
+- `pile migrate <PILE> list` — list known migrations and whether they are needed for this pile.
+- `pile migrate <PILE> run [MIGRATION]` — run migrations (all by default). Pass `--dry-run` to preview changes.
+
+If branch commands cannot resolve names in an older pile, run:
+
+```bash
+trible pile migrate <PILE> run branch-metadata-name
+```
 
 #### Branches
 
