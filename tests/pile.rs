@@ -31,6 +31,44 @@ fn list_branches_outputs_branch_id() {
 }
 
 #[test]
+fn delete_branch_removes_branch_id_from_list() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("delete_test.pile");
+
+    let branch_id = {
+        let pile: Pile<Blake3> = Pile::open(&path).unwrap();
+        let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
+        let branch_id = repo.create_branch("main", None).expect("create branch");
+        let pile = repo.into_storage();
+        pile.close().unwrap();
+        *branch_id
+    };
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "branch",
+            "delete",
+            path.to_str().unwrap(),
+            &format!("{branch_id:X}"),
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args(["pile", "branch", "list", path.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let mut pile: Pile<Blake3> = Pile::open(&path).unwrap();
+    pile.refresh().unwrap();
+    assert_eq!(pile.head(branch_id).unwrap(), None);
+}
+
+#[test]
 fn create_initializes_empty_pile() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("create_test.pile");

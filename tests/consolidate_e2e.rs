@@ -25,12 +25,14 @@ fn consolidate_merges_branch_heads() {
 
     // Create a repository and three branches with the same name.
     let mut original_heads: Vec<String> = Vec::new();
+    let mut branch_ids: Vec<String> = Vec::new();
     {
         let pile: Pile<Blake3> = Pile::open(&pile_path).unwrap();
         let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
 
         for i in 0..3 {
             let branch_id = repo.create_branch("mem", None).expect("create branch");
+            branch_ids.push(format!("{:X}", *branch_id));
             let mut ws = repo.pull(*branch_id).expect("pull");
             let e = ufoid();
             let mut content = TribleSet::new();
@@ -57,19 +59,23 @@ fn consolidate_merges_branch_heads() {
     std::fs::write(&key_path, sk_hex).unwrap();
 
     // Run the CLI consolidate command
+    let mut args: Vec<String> = vec![
+        "pile".to_string(),
+        "branch".to_string(),
+        "consolidate".to_string(),
+        pile_path.to_str().unwrap().to_string(),
+    ];
+    args.extend(branch_ids);
+    args.extend([
+        "--out-name".to_string(),
+        "mem-out".to_string(),
+        "--signing-key".to_string(),
+        key_path.to_str().unwrap().to_string(),
+    ]);
+
     let out = Command::cargo_bin("trible")
         .unwrap()
-        .args([
-            "pile",
-            "branch",
-            "consolidate",
-            pile_path.to_str().unwrap(),
-            "mem",
-            "--out-name",
-            "mem-out",
-            "--signing-key",
-            key_path.to_str().unwrap(),
-        ])
+        .args(args)
         .output()
         .expect("run trible");
 

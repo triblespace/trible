@@ -33,9 +33,9 @@ pub enum PileCommand {
     Merge {
         /// Path to the pile file to modify
         pile: PathBuf,
-        /// Target branch name or id (hex)
+        /// Target branch id (hex)
         target: String,
-        /// Source branch name(s) or id(s) (hex)
+        /// Source branch id(s) (hex)
         #[arg(num_args = 1..)]
         sources: Vec<String>,
         /// Optional signing key path. The file should contain a 64-char hex seed.

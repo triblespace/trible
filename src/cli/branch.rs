@@ -66,7 +66,7 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
                     .head(id)?
                     .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
                 let old = remote.head(id)?;
-                remote.update(id, old, handle)?;
+                remote.update(id, old, Some(handle))?;
                 Ok(())
             })();
             let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
@@ -105,7 +105,7 @@ pub fn run(cmd: BranchCommand) -> Result<()> {
                     .head(id)?
                     .ok_or_else(|| anyhow::anyhow!("branch not found"))?;
                 let old = pile.head(id)?;
-                pile.update(id, old, handle)?;
+                pile.update(id, old, Some(handle))?;
                 Ok(())
             })();
             let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
