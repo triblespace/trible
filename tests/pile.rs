@@ -1,7 +1,6 @@
 use assert_cmd::Command;
 use ed25519_dalek::SigningKey;
 use predicates::prelude::*;
-use rand::rngs::OsRng;
 use tempfile::tempdir;
 use triblespace::prelude::BlobStore;
 use triblespace::prelude::BlobStoreList;
@@ -10,6 +9,12 @@ use triblespace_core::repo::pile::Pile;
 use triblespace_core::repo::Repository;
 use triblespace_core::value::schemas::hash::Blake3;
 
+fn random_signing_key() -> SigningKey {
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed).expect("getrandom");
+    SigningKey::from_bytes(&seed)
+}
+
 #[test]
 fn list_branches_outputs_branch_id() {
     let dir = tempdir().unwrap();
@@ -17,7 +22,7 @@ fn list_branches_outputs_branch_id() {
 
     {
         let pile: Pile<Blake3> = Pile::open(&path).unwrap();
-        let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
+        let mut repo = Repository::new(pile, random_signing_key());
         repo.create_branch("main", None).expect("create branch");
         repo.into_storage().close().unwrap();
     }
@@ -37,7 +42,7 @@ fn delete_branch_removes_branch_id_from_list() {
 
     let branch_id = {
         let pile: Pile<Blake3> = Pile::open(&path).unwrap();
-        let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
+        let mut repo = Repository::new(pile, random_signing_key());
         let branch_id = repo.create_branch("main", None).expect("create branch");
         let pile = repo.into_storage();
         pile.close().unwrap();

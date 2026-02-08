@@ -1,6 +1,5 @@
 use anyhow::Result;
 use ed25519_dalek::SigningKey;
-use rand::rngs::OsRng;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -34,5 +33,8 @@ pub(super) fn load_signing_key(path_opt: &Option<PathBuf>) -> Result<SigningKey,
         return Ok(SigningKey::from_bytes(&arr));
     }
 
-    Ok(SigningKey::generate(&mut OsRng))
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed)
+        .map_err(|e| anyhow::anyhow!("failed to generate ephemeral signing key: {e}"))?;
+    Ok(SigningKey::from_bytes(&seed))
 }

@@ -1,6 +1,5 @@
 use assert_cmd::Command;
 use ed25519_dalek::SigningKey;
-use rand::rngs::OsRng;
 use std::collections::HashSet;
 use std::convert::TryInto;
 use tempfile::tempdir;
@@ -15,6 +14,12 @@ use triblespace_core::value::schemas::hash::Blake3;
 use triblespace_core::value::schemas::hash::Handle;
 use triblespace_core::value::Value;
 
+fn random_signing_key() -> SigningKey {
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed).expect("getrandom");
+    SigningKey::from_bytes(&seed)
+}
+
 /// End-to-end test: create multiple branches with the same name, run the
 /// consolidate command and verify the resulting merge commit parents match
 /// the original branch heads.
@@ -28,7 +33,7 @@ fn consolidate_merges_branch_heads() {
     let mut branch_ids: Vec<String> = Vec::new();
     {
         let pile: Pile<Blake3> = Pile::open(&pile_path).unwrap();
-        let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
+        let mut repo = Repository::new(pile, random_signing_key());
 
         for i in 0..3 {
             let branch_id = repo.create_branch("mem", None).expect("create branch");
@@ -53,7 +58,7 @@ fn consolidate_merges_branch_heads() {
     }
 
     // Write a signing key file (hex) used by the trible CLI when creating the merge commit.
-    let sk = SigningKey::generate(&mut OsRng);
+    let sk = random_signing_key();
     let sk_hex = hex::encode(sk.to_bytes());
     let key_path = dir.path().join("signing.key");
     std::fs::write(&key_path, sk_hex).unwrap();

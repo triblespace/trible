@@ -2,8 +2,6 @@ use anyhow::Result;
 use clap::CommandFactory;
 use clap::Parser;
 use clap_complete::Shell;
-use rand::rngs::OsRng;
-use rand::RngCore;
 use std::io;
 
 pub const DEFAULT_MAX_PILE_SIZE: usize = 1 << 44; // 16 TiB
@@ -46,7 +44,7 @@ fn main() -> Result<()> {
     match args {
         TribleCli::Genid => {
             let mut id = [0u8; 16];
-            OsRng.fill_bytes(&mut id);
+            getrandom::fill(&mut id)?;
             let encoded_id = hex::encode(id);
             println!("{}", encoded_id.to_ascii_uppercase());
         }

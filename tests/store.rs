@@ -1,11 +1,16 @@
 use assert_cmd::Command;
 use ed25519_dalek::SigningKey;
 use predicates::prelude::*;
-use rand::rngs::OsRng;
 use tempfile::tempdir;
 use triblespace_core::repo::pile::Pile;
 use triblespace_core::repo::Repository;
 use triblespace_core::value::schemas::hash::Blake3;
+
+fn random_signing_key() -> SigningKey {
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed).expect("getrandom");
+    SigningKey::from_bytes(&seed)
+}
 
 #[test]
 fn store_blob_list_outputs_file() {
@@ -191,7 +196,7 @@ fn branch_push_pull_transfers_branch() {
 
     let branch_id = {
         let pile: Pile<Blake3> = Pile::open(&local).unwrap();
-        let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
+        let mut repo = Repository::new(pile, random_signing_key());
 
         repo.create_branch("main", None).unwrap()
     };
