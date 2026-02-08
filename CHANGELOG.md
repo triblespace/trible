@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-02-08
+### Changed
+- `pile branch list` now prints `id head name` for easier column alignment.
+
 ## [0.11.0] - 2026-02-08
 ### Added
 - Initial changelog with Let's Changelog format.

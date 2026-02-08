@@ -1,6 +1,6 @@
 [package]
 name = "trible"
-version = "0.11.0"
+version = "0.11.1"
 authors = ["⚫️ <jp@bultmann.eu>"]
 edition = "2021"
 description = "A knowledge graph and meta file system for object stores."

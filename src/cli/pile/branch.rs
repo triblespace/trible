@@ -25,7 +25,7 @@ type BranchNameHandle = Value<Handle<Blake3, LongString>>;
 
 #[derive(Parser)]
 pub enum Command {
-    /// List branches in a pile file (name + id + head).
+    /// List branches in a pile file (id + head + name).
     List {
         /// Path to the pile file to inspect
         path: PathBuf,
@@ -212,7 +212,7 @@ pub fn run(cmd: Command) -> Result<()> {
                 });
 
                 for (name, id, head) in rows {
-                    println!("{name}\t{id:X}\t{head}");
+                    println!("{id:X}\t{head}\t{name}");
                 }
                 Ok(())
             })();

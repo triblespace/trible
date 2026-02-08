@@ -4,7 +4,7 @@ Trible CLI is a friendly companion for exploring and managing
 [Tribles](https://github.com/triblespace/tribles-rust) and TribleSpace piles
 from the command line.
 
-This crate is versioned in lockstep with `triblespace`.
+This crate tracks `triblespace` releases (major/minor), and may ship independent patch releases.
 
 ## Installation
 
@@ -74,7 +74,7 @@ trible pile migrate <PILE> run branch-metadata-name
 
 #### Branches
 
-- `pile branch list <PILE>` — list branch names, ids, and heads.
+- `pile branch list <PILE>` — list branch ids, heads, and names.
 - `pile branch create <PILE> <NAME>` — create a new branch.
 - `pile branch delete <PILE> <BRANCH_ID>` — delete a branch (writes a tombstone record).
 - `pile branch consolidate <PILE> <BRANCH_ID...>` — consolidate multiple branches into a single new branch. The command creates a single merge commit whose parents are the selected branch heads and prints the new branch id.

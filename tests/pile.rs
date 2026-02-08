@@ -27,7 +27,7 @@ fn list_branches_outputs_branch_id() {
         .args(["pile", "branch", "list", path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::is_match("^main\\t[A-F0-9]{32}\\t-\\n$").unwrap());
+        .stdout(predicate::str::is_match("^[A-F0-9]{32}\\t-\\tmain\\n$").unwrap());
 }
 
 #[test]
@@ -366,5 +366,5 @@ fn pile_branch_create_outputs_id() {
         .args(["pile", "branch", "list", pile_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::is_match("^main\\t[A-F0-9]{32}\\t-\\n$").unwrap());
+        .stdout(predicate::str::is_match("^[A-F0-9]{32}\\t-\\tmain\\n$").unwrap());
 }
