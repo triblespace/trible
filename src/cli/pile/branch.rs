@@ -9,6 +9,7 @@ use triblespace::prelude::BlobStore;
 use triblespace::prelude::BlobStoreGet;
 use triblespace::prelude::BranchStore;
 use triblespace::prelude::View;
+use triblespace::prelude::blobschemas::SimpleArchive;
 use triblespace_core::blob::schemas::longstring::LongString;
 use triblespace_core::blob::ToBlob;
 use triblespace_core::id::id_hex;
@@ -24,7 +25,7 @@ type BranchNameHandle = Value<Handle<Blake3, LongString>>;
 
 #[derive(Parser)]
 pub enum Command {
-    /// List branches in a pile file (id + name).
+    /// List branches in a pile file (name + id + head).
     List {
         /// Path to the pile file to inspect
         path: PathBuf,
@@ -141,21 +142,24 @@ pub fn run(cmd: Command) -> Result<()> {
                     .reader()
                     .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
                 let iter = pile.branches()?;
-                let mut rows: Vec<(Id, String)> = Vec::new();
+                let head_attr = triblespace_core::repo::head.id();
+                let mut rows: Vec<(String, Id, String)> = Vec::new();
                 for branch in iter {
                     let id = branch?;
                     let meta_handle = match pile.head(id)? {
                         Some(handle) => handle,
                         None => {
-                            rows.push((id, "<deleted>".to_string()));
+                            rows.push(("<deleted>".to_string(), id, "-".to_string()));
                             continue;
                         }
                     };
 
-                    let name = match reader.get::<TribleSet, _>(meta_handle) {
+                    let (name, head) = match reader.get::<TribleSet, _>(meta_handle) {
                         Ok(meta) => {
                             let name_attr = triblespace_core::metadata::name.id();
                             let mut name_handle: Option<BranchNameHandle> = None;
+                            let mut head_handle: Option<Value<Handle<Blake3, SimpleArchive>>> =
+                                None;
                             for t in meta.iter() {
                                 if t.a() == &name_attr {
                                     let h: BranchNameHandle = *t.v();
@@ -164,10 +168,16 @@ pub fn run(cmd: Command) -> Result<()> {
                                         name_handle = None;
                                         break;
                                     }
+                                } else if t.a() == &head_attr {
+                                    let h: Value<Handle<Blake3, SimpleArchive>> = *t.v();
+                                    if head_handle.replace(h).is_some() {
+                                        // Multiple heads -> treat as missing.
+                                        head_handle = None;
+                                    }
                                 }
                             }
 
-                            match name_handle {
+                            let name = match name_handle {
                                 None => "<unnamed>".to_string(),
                                 Some(handle) => match reader.get::<View<str>, _>(handle) {
                                     Ok(view) => view.as_ref().to_string(),
@@ -176,23 +186,33 @@ pub fn run(cmd: Command) -> Result<()> {
                                         hex::encode_upper(&handle.raw[..4])
                                     ),
                                 },
-                            }
+                            };
+
+                            let head = match head_handle {
+                                None => "-".to_string(),
+                                Some(handle) => format!("blake3:{}", hex::encode(handle.raw)),
+                            };
+
+                            (name, head)
                         }
-                        Err(_) => format!(
-                            "<metadata blob missing ({})>",
-                            hex::encode_upper(&meta_handle.raw[..4])
+                        Err(_) => (
+                            format!(
+                                "<metadata blob missing ({})>",
+                                hex::encode_upper(&meta_handle.raw[..4])
+                            ),
+                            "-".to_string(),
                         ),
                     };
 
-                    rows.push((id, name));
+                    rows.push((name, id, head));
                 }
 
-                rows.sort_by(|(a_id, a_name), (b_id, b_name)| {
+                rows.sort_by(|(a_name, a_id, _), (b_name, b_id, _)| {
                     a_name.cmp(b_name).then_with(|| a_id.cmp(b_id))
                 });
 
-                for (id, name) in rows {
-                    println!("{id:X}\t{name}");
+                for (name, id, head) in rows {
+                    println!("{name}\t{id:X}\t{head}");
                 }
                 Ok(())
             })();
