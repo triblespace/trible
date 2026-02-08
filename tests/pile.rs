@@ -19,7 +19,7 @@ fn list_branches_outputs_branch_id() {
         let pile: Pile<Blake3> = Pile::open(&path).unwrap();
         let mut repo = Repository::new(pile, SigningKey::generate(&mut OsRng));
         repo.create_branch("main", None).expect("create branch");
-        // drop repo to flush changes
+        repo.into_storage().close().unwrap();
     }
 
     Command::cargo_bin("trible")
@@ -27,7 +27,7 @@ fn list_branches_outputs_branch_id() {
         .args(["pile", "branch", "list", path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::is_match("^[A-F0-9]{32}\\n$").unwrap());
+        .stdout(predicate::str::is_match("^[A-F0-9]{32}\\tmain\\n$").unwrap());
 }
 
 #[test]
@@ -366,5 +366,5 @@ fn pile_branch_create_outputs_id() {
         .args(["pile", "branch", "list", pile_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::is_match("^[A-F0-9]{32}\\n$").unwrap());
+        .stdout(predicate::str::is_match("^[A-F0-9]{32}\\tmain\\n$").unwrap());
 }

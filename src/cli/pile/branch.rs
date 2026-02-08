@@ -24,7 +24,7 @@ type BranchNameHandle = Value<Handle<Blake3, LongString>>;
 
 #[derive(Parser)]
 pub enum Command {
-    /// List all branch identifiers in a pile file.
+    /// List branches in a pile file (id + name).
     List {
         /// Path to the pile file to inspect
         path: PathBuf,
@@ -137,10 +137,62 @@ pub fn run(cmd: Command) -> Result<()> {
                 // Refresh in-memory indices from the file so branches() reflects current state.
                 pile.refresh()?;
 
+                let reader = pile
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
                 let iter = pile.branches()?;
+                let mut rows: Vec<(Id, String)> = Vec::new();
                 for branch in iter {
                     let id = branch?;
-                    println!("{id:X}");
+                    let meta_handle = match pile.head(id)? {
+                        Some(handle) => handle,
+                        None => {
+                            rows.push((id, "<deleted>".to_string()));
+                            continue;
+                        }
+                    };
+
+                    let name = match reader.get::<TribleSet, _>(meta_handle) {
+                        Ok(meta) => {
+                            let name_attr = triblespace_core::metadata::name.id();
+                            let mut name_handle: Option<BranchNameHandle> = None;
+                            for t in meta.iter() {
+                                if t.a() == &name_attr {
+                                    let h: BranchNameHandle = *t.v();
+                                    if name_handle.replace(h).is_some() {
+                                        // Multiple names -> treat as unnamed.
+                                        name_handle = None;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            match name_handle {
+                                None => "<unnamed>".to_string(),
+                                Some(handle) => match reader.get::<View<str>, _>(handle) {
+                                    Ok(view) => view.as_ref().to_string(),
+                                    Err(_) => format!(
+                                        "<name blob missing ({})>",
+                                        hex::encode_upper(&handle.raw[..4])
+                                    ),
+                                },
+                            }
+                        }
+                        Err(_) => format!(
+                            "<metadata blob missing ({})>",
+                            hex::encode_upper(&meta_handle.raw[..4])
+                        ),
+                    };
+
+                    rows.push((id, name));
+                }
+
+                rows.sort_by(|(a_id, a_name), (b_id, b_name)| {
+                    a_name.cmp(b_name).then_with(|| a_id.cmp(b_id))
+                });
+
+                for (id, name) in rows {
+                    println!("{id:X}\t{name}");
                 }
                 Ok(())
             })();
