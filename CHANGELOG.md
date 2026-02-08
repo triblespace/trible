@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.11.0] - 2026-02-08
 ### Added
 - Initial changelog with Let's Changelog format.
 - `pile merge` command to merge source branch heads into a target branch.
@@ -29,6 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `store blob get` command to download blobs from object stores.
 - `store branch list` command to list branches in an object store.
 - `pile branch create` command to create a new branch.
+- `pile branch delete` command to delete a branch via a tombstone record.
 - `branch push` and `branch pull` commands to sync branches with remote stores.
 - Tests for branch creation and branch push/pull using a file object store.
 - Logged an inventory task to provide a structured command overview in the README.
@@ -40,6 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Test ensuring `pile blob list` outputs the exact handle for ingested blobs.
 - Optional metadata output for `pile blob list`.
 ### Changed
+- Versioning is now aligned with `triblespace` releases.
 - Updated consolidate E2E test commits to pass optional metadata explicitly.
 - Renamed `id-gen` command to `genid` to align with the GenID schema.
 - Expanded `AGENTS.md` with sections from the Tribles project and a dedicated
@@ -54,6 +58,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Simplified `Pile::open` error handling now that `OpenError` implements
   `std::error::Error` upstream.
 - `pile list-blobs` output uses lowercase hex instead of uppercase.
+- `pile branch list` output now includes name and head commit in addition to the branch id.
 - Pile commands reorganized under `branch` and `blob` subcommands.
 - Store commands reorganized under `branch` and `blob` subcommands.
 - Simplified file ingestion using `anybytes::Bytes::map_file` and removed

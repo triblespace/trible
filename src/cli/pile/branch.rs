@@ -5,11 +5,11 @@ use std::path::PathBuf;
 
 // DEFAULT_MAX_PILE_SIZE removed; the new Pile API no longer uses a size const generic
 
+use triblespace::prelude::blobschemas::SimpleArchive;
 use triblespace::prelude::BlobStore;
 use triblespace::prelude::BlobStoreGet;
 use triblespace::prelude::BranchStore;
 use triblespace::prelude::View;
-use triblespace::prelude::blobschemas::SimpleArchive;
 use triblespace_core::blob::schemas::longstring::LongString;
 use triblespace_core::blob::ToBlob;
 use triblespace_core::id::id_hex;
@@ -332,9 +332,9 @@ pub fn run(cmd: Command) -> Result<()> {
                         println!("deleted branch {branch_id:X}");
                         Ok(())
                     }
-                    triblespace_core::repo::PushResult::Conflict(_) => anyhow::bail!(
-                        "branch {branch_id:X} advanced concurrently; rerun delete"
-                    ),
+                    triblespace_core::repo::PushResult::Conflict(_) => {
+                        anyhow::bail!("branch {branch_id:X} advanced concurrently; rerun delete")
+                    }
                 }
             })();
             let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));

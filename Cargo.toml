@@ -1,11 +1,11 @@
 [package]
 name = "trible"
-version = "0.3.0"
+version = "0.11.0"
 authors = ["⚫️ <jp@bultmann.eu>"]
 edition = "2021"
 description = "A knowledge graph and meta file system for object stores."
 homepage = "https://tribles.space"
-repository = "https://github.com/triblesspace/trible"
+repository = "https://github.com/triblespace/trible"
 license = "MIT"
 readme = "README.md"
 keywords = [
@@ -29,8 +29,8 @@ clap_complete = "4.5.55"
 anyhow = "1.0.80"
 rand = "0.8.5"
 hex = "0.4.3"
-triblespace = { path = "../triblespace-rs" }
-triblespace-core = { path = "../triblespace-rs/triblespace-core" }
+triblespace = "0.11.0"
+triblespace-core = "0.11.0"
 file_type = "=0.8.7"
 chrono = "0.4"
 object_store = { version = "0.12", default-features = false, features = ["aws", "fs"] }

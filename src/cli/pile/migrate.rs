@@ -216,7 +216,11 @@ fn migrate_branch_metadata_name(
                 .context("store updated branch metadata")?;
 
             match pile
-                .update(info.branch_id, Some(info.meta_handle), Some(new_meta_handle))
+                .update(
+                    info.branch_id,
+                    Some(info.meta_handle),
+                    Some(new_meta_handle),
+                )
                 .map_err(|e| anyhow!("update branch {:X}: {e:?}", info.branch_id))?
             {
                 PushResult::Success() => {
@@ -397,7 +401,11 @@ fn rename_duplicate_branch_names(
                 .context("store renamed branch metadata")?;
 
             match pile
-                .update(orphan.branch_id, Some(orphan.meta_handle), Some(new_meta_handle))
+                .update(
+                    orphan.branch_id,
+                    Some(orphan.meta_handle),
+                    Some(new_meta_handle),
+                )
                 .map_err(|e| anyhow!("update branch {:X}: {e:?}", orphan.branch_id))?
             {
                 PushResult::Success() => {
