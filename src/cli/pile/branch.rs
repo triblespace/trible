@@ -586,7 +586,7 @@ pub fn run(cmd: Command) -> Result<()> {
                             Err(_) => continue,
                         };
                         total_triples_accum += content.len();
-                        unioned.union(content);
+                        unioned += content;
                     }
 
                     for p in parents {
