@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
+use std::collections::VecDeque;
 use std::convert::TryInto;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 // DEFAULT_MAX_PILE_SIZE removed; the new Pile API no longer uses a size const generic
@@ -22,6 +24,17 @@ use super::signing::load_signing_key;
 use triblespace_core::repo::BlobStoreMeta;
 
 type BranchNameHandle = Value<Handle<Blake3, LongString>>;
+
+// These markers are part of the stable on-disk pile format (see
+// triblespace-rs/book/src/pile-format.md). Copy them exactly; do not invent.
+#[allow(non_upper_case_globals)]
+const MAGIC_MARKER_BLOB: Id = id_hex!("1E08B022FF2F47B6EBACF1D68EB35D96");
+#[allow(non_upper_case_globals)]
+const MAGIC_MARKER_BRANCH: Id = id_hex!("2BC991A7F5D5D2A3A468C53B0AA03504");
+#[allow(non_upper_case_globals)]
+const MAGIC_MARKER_BRANCH_TOMBSTONE: Id = id_hex!("E888CC787202D2AE4C654BFE9699C430");
+
+const RECORD_LEN: u64 = 64;
 
 #[derive(Parser)]
 pub enum Command {
@@ -57,6 +70,19 @@ pub enum Command {
     /// Scan the pile for historical branch metadata entries for this branch.
     /// This lists candidate metadata blobs that reference the branch id.
     History {
+        /// Path to the pile file to inspect
+        pile: PathBuf,
+        /// Branch identifier to inspect (hex encoded)
+        branch: String,
+        /// Maximum results to print
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
+    /// Show a reflog-like history of branch head updates stored in the pile.
+    ///
+    /// This scans the pile file for branch update and tombstone records and
+    /// prints the most recent entries for a branch (latest first).
+    Reflog {
         /// Path to the pile file to inspect
         pile: PathBuf,
         /// Branch identifier to inspect (hex encoded)
@@ -422,6 +448,183 @@ pub fn run(cmd: Command) -> Result<()> {
             })();
             let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
             res.and(close_res)?;
+        }
+        Command::Reflog {
+            pile,
+            branch,
+            limit,
+        } => {
+            use triblespace::prelude::blobschemas::SimpleArchive;
+            use triblespace::prelude::valueschemas::Handle;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::trible::TribleSet;
+            use triblespace_core::value::schemas::hash::Blake3;
+            use triblespace_core::value::Value;
+
+            let branch_id = parse_branch_id_hex(&branch)?;
+
+            let mut pile_reader: Pile<Blake3> = Pile::open(&pile)?;
+            // Ensure indices are loaded; metadata lookups below rely on it.
+            pile_reader.refresh()?;
+            let reader = pile_reader
+                .reader()
+                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
+
+            let mut file = std::fs::File::open(&pile)?;
+            let file_len = file.metadata()?.len();
+
+            #[derive(Clone, Debug)]
+            enum Kind {
+                Set,
+                Delete,
+            }
+
+            #[derive(Clone, Debug)]
+            struct Entry {
+                offset: u64,
+                kind: Kind,
+                // Branch metadata handle (the branch store value), if this is a Set.
+                meta: Option<Value<Handle<Blake3, SimpleArchive>>>,
+                meta_present: bool,
+                // Commit head stored in the branch metadata (repo::head), if readable.
+                head: Option<Value<Handle<Blake3, SimpleArchive>>>,
+                head_present: Option<bool>,
+                name: Option<String>,
+            }
+
+            let mut entries: VecDeque<Entry> = VecDeque::with_capacity(limit.max(1));
+
+            let mut offset: u64 = 0;
+            let mut buf = [0u8; RECORD_LEN as usize];
+            while offset + RECORD_LEN <= file_len {
+                file.seek(SeekFrom::Start(offset))?;
+                if let Err(_) = file.read_exact(&mut buf) {
+                    break;
+                }
+
+                let magic: [u8; 16] = buf[0..16].try_into().unwrap();
+                if magic == MAGIC_MARKER_BLOB.raw() {
+                    // Skip blob payload without reading it.
+                    let len = u64::from_ne_bytes(buf[24..32].try_into().unwrap());
+                    let pad = blob_padding(len);
+                    offset = offset
+                        .checked_add(RECORD_LEN)
+                        .and_then(|o| o.checked_add(len))
+                        .and_then(|o| o.checked_add(pad))
+                        .ok_or_else(|| anyhow::anyhow!("pile too large"))?;
+                    continue;
+                }
+
+                if magic == MAGIC_MARKER_BRANCH.raw() {
+                    let raw_id: [u8; 16] = buf[16..32].try_into().unwrap();
+                    let Some(id) = Id::new(raw_id) else {
+                        // Nil/invalid branch id => corrupt record; stop.
+                        break;
+                    };
+
+                    if id == branch_id {
+                        let raw_handle: [u8; 32] = buf[32..64].try_into().unwrap();
+                        let meta: Value<Handle<Blake3, SimpleArchive>> = Value::new(raw_handle);
+                        let meta_present = reader.metadata(meta)?.is_some();
+
+                        let mut head: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
+                        let mut head_present: Option<bool> = None;
+                        let mut name: Option<String> = None;
+                        if meta_present {
+                            if let Ok(meta_set) = reader.get::<TribleSet, SimpleArchive>(meta) {
+                                name = load_branch_name(&reader, &meta_set).ok().flatten();
+                                head = extract_repo_head(&meta_set);
+                                if let Some(h) = head {
+                                    head_present = Some(reader.metadata(h)?.is_some());
+                                }
+                            }
+                        }
+
+                        if entries.len() == limit {
+                            entries.pop_front();
+                        }
+                        entries.push_back(Entry {
+                            offset,
+                            kind: Kind::Set,
+                            meta: Some(meta),
+                            meta_present,
+                            head,
+                            head_present,
+                            name,
+                        });
+                    }
+
+                    offset += RECORD_LEN;
+                    continue;
+                }
+
+                if magic == MAGIC_MARKER_BRANCH_TOMBSTONE.raw() {
+                    let raw_id: [u8; 16] = buf[16..32].try_into().unwrap();
+                    let Some(id) = Id::new(raw_id) else {
+                        break;
+                    };
+
+                    if id == branch_id {
+                        if entries.len() == limit {
+                            entries.pop_front();
+                        }
+                        entries.push_back(Entry {
+                            offset,
+                            kind: Kind::Delete,
+                            meta: None,
+                            meta_present: false,
+                            head: None,
+                            head_present: None,
+                            name: None,
+                        });
+                    }
+
+                    offset += RECORD_LEN;
+                    continue;
+                }
+
+                // Unknown marker or torn tail.
+                break;
+            }
+
+            // Print latest first, like git's reflog.
+            for (idx, entry) in entries.iter().rev().enumerate() {
+                let offset = entry.offset;
+                let kind = match entry.kind {
+                    Kind::Set => "set",
+                    Kind::Delete => "delete",
+                };
+
+                let meta = match entry.meta {
+                    None => "-".to_string(),
+                    Some(h) => format!("blake3:{}", hex::encode(h.raw)),
+                };
+                let head = match entry.head {
+                    None => "-".to_string(),
+                    Some(h) => format!("blake3:{}", hex::encode(h.raw)),
+                };
+                let name = entry.name.as_deref().unwrap_or("-");
+                let meta_state = if entry.meta.is_none() {
+                    "-"
+                } else if entry.meta_present {
+                    "present"
+                } else {
+                    "missing"
+                };
+                let head_state = match entry.head_present {
+                    None => "-",
+                    Some(true) => "present",
+                    Some(false) => "missing",
+                };
+
+                println!(
+                    "{idx}\toffset={offset}\t{kind}\tmeta={meta}\tmeta[{meta_state}]\thead={head}\thead[{head_state}]\tname={name}"
+                );
+            }
+
+            pile_reader
+                .close()
+                .map_err(|e| anyhow::anyhow!("close pile: {e:?}"))?;
         }
         Command::Export {
             from_pile,
@@ -868,6 +1071,37 @@ pub fn run(cmd: Command) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn blob_padding(len: u64) -> u64 {
+    // The pile stores blobs padded so the next record begins on a 64-byte boundary.
+    let rem = len % RECORD_LEN;
+    if rem == 0 {
+        0
+    } else {
+        RECORD_LEN - rem
+    }
+}
+
+fn extract_repo_head(meta: &TribleSet) -> Option<Value<Handle<Blake3, SimpleArchive>>> {
+    use triblespace::prelude::blobschemas::SimpleArchive;
+    use triblespace::prelude::valueschemas::Handle;
+    use triblespace_core::repo;
+    use triblespace_core::value::schemas::hash::Blake3;
+    use triblespace_core::value::Value;
+
+    let head_attr = repo::head.id();
+    let mut head_handle: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
+    for t in meta.iter() {
+        if t.a() == &head_attr {
+            let h: Value<Handle<Blake3, SimpleArchive>> = *t.v();
+            if head_handle.replace(h).is_some() {
+                // Multiple heads -> ambiguous.
+                return None;
+            }
+        }
+    }
+    head_handle
 }
 
 fn parse_branch_id_hex(s: &str) -> Result<Id> {
