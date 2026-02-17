@@ -75,8 +75,9 @@ pub fn run(cmd: PileCommand) -> Result<()> {
                 fs::create_dir_all(parent)?;
             }
 
-            let mut pile: Pile<Blake3> = Pile::open(&path)?;
-            pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            let pile: Pile<Blake3> = Pile::open(&path)?;
+            // Explicit close makes the empty pile durable and avoids Drop warnings.
+            pile.close().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             Ok(())
         }
         PileCommand::Diagnose { cmd } => diagnose::run(cmd),

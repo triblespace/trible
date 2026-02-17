@@ -198,7 +198,9 @@ fn branch_push_pull_transfers_branch() {
         let pile: Pile<Blake3> = Pile::open(&local).unwrap();
         let mut repo = Repository::new(pile, random_signing_key());
 
-        repo.create_branch("main", None).unwrap()
+        let branch_id = repo.create_branch("main", None).unwrap();
+        repo.close().unwrap();
+        branch_id
     };
     let branch_hex = hex::encode(branch_id);
 

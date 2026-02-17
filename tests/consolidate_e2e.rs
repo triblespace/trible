@@ -54,7 +54,7 @@ fn consolidate_merges_branch_heads() {
                 Handle::to_hash(head);
             original_heads.push(hh.from_value());
         }
-        // repo drops here and flushes
+        repo.close().unwrap();
     }
 
     // Write a signing key file (hex) used by the trible CLI when creating the merge commit.
@@ -143,4 +143,6 @@ fn consolidate_merges_branch_heads() {
         parents, orig_set,
         "parents of merge commit do not match original heads"
     );
+    drop(reader);
+    pile.close().unwrap();
 }

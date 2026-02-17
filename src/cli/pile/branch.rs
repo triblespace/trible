@@ -287,14 +287,21 @@ pub fn run(cmd: Command) -> Result<()> {
             let pile: Pile<Blake3> = Pile::open(&pile)?;
             let key = load_signing_key(&signing_key)?;
             let mut repo = Repository::new(pile, key);
-            let branch_id = repo
-                .create_branch(&name, None)
-                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-            println!("{:#X}", *branch_id);
-            // Ensure the underlying pile is closed and errors are surfaced.
-            repo.into_storage()
+
+            let res = (|| -> Result<(), anyhow::Error> {
+                let branch_id = repo
+                    .create_branch(&name, None)
+                    .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                println!("{:#X}", *branch_id);
+                Ok(())
+            })();
+
+            // Ensure the underlying pile is closed whether the command succeeds or fails.
+            let close_res = repo
+                .into_storage()
                 .close()
-                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                .map_err(|e| anyhow::anyhow!("{e:?}"));
+            res.and(close_res)?;
         }
         Command::Inspect { pile, branch } => {
             use triblespace::prelude::blobschemas::SimpleArchive;
@@ -537,167 +544,171 @@ pub fn run(cmd: Command) -> Result<()> {
             let branch_id = parse_branch_id_hex(&branch)?;
 
             let mut pile_reader: Pile<Blake3> = Pile::open(&pile)?;
-            // Ensure indices are loaded; metadata lookups below rely on it.
-            pile_reader.refresh()?;
-            let reader = pile_reader
-                .reader()
-                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
+            let res = (|| -> Result<(), anyhow::Error> {
+                // Ensure indices are loaded; metadata lookups below rely on it.
+                pile_reader.refresh()?;
+                let reader = pile_reader
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
 
-            let mut file = std::fs::File::open(&pile)?;
-            let file_len = file.metadata()?.len();
+                let mut file = std::fs::File::open(&pile)?;
+                let file_len = file.metadata()?.len();
 
-            #[derive(Clone, Debug)]
-            enum Kind {
-                Set,
-                Delete,
-            }
+                #[derive(Clone, Debug)]
+                enum Kind {
+                    Set,
+                    Delete,
+                }
 
-            #[derive(Clone, Debug)]
-            struct Entry {
-                offset: u64,
-                kind: Kind,
-                // Branch metadata handle (the branch store value), if this is a Set.
-                meta: Option<Value<Handle<Blake3, SimpleArchive>>>,
-                meta_present: bool,
-                // Commit head stored in the branch metadata (repo::head), if readable.
-                head: Option<Value<Handle<Blake3, SimpleArchive>>>,
-                head_present: Option<bool>,
-                name: Option<String>,
-            }
+                #[derive(Clone, Debug)]
+                struct Entry {
+                    offset: u64,
+                    kind: Kind,
+                    // Branch metadata handle (the branch store value), if this is a Set.
+                    meta: Option<Value<Handle<Blake3, SimpleArchive>>>,
+                    meta_present: bool,
+                    // Commit head stored in the branch metadata (repo::head), if readable.
+                    head: Option<Value<Handle<Blake3, SimpleArchive>>>,
+                    head_present: Option<bool>,
+                    name: Option<String>,
+                }
 
-            let mut entries: VecDeque<Entry> = VecDeque::with_capacity(limit.max(1));
+                let mut entries: VecDeque<Entry> = VecDeque::with_capacity(limit.max(1));
 
-            let mut offset: u64 = 0;
-            let mut buf = [0u8; RECORD_LEN as usize];
-            while offset + RECORD_LEN <= file_len {
-                file.seek(SeekFrom::Start(offset))?;
-                if let Err(_) = file.read_exact(&mut buf) {
+                let mut offset: u64 = 0;
+                let mut buf = [0u8; RECORD_LEN as usize];
+                while offset + RECORD_LEN <= file_len {
+                    file.seek(SeekFrom::Start(offset))?;
+                    if let Err(_) = file.read_exact(&mut buf) {
+                        break;
+                    }
+
+                    let magic: [u8; 16] = buf[0..16].try_into().unwrap();
+                    if magic == MAGIC_MARKER_BLOB.raw() {
+                        // Skip blob payload without reading it.
+                        let len = u64::from_ne_bytes(buf[24..32].try_into().unwrap());
+                        let pad = blob_padding(len);
+                        offset = offset
+                            .checked_add(RECORD_LEN)
+                            .and_then(|o| o.checked_add(len))
+                            .and_then(|o| o.checked_add(pad))
+                            .ok_or_else(|| anyhow::anyhow!("pile too large"))?;
+                        continue;
+                    }
+
+                    if magic == MAGIC_MARKER_BRANCH.raw() {
+                        let raw_id: [u8; 16] = buf[16..32].try_into().unwrap();
+                        let Some(id) = Id::new(raw_id) else {
+                            // Nil/invalid branch id => corrupt record; stop.
+                            break;
+                        };
+
+                        if id == branch_id {
+                            let raw_handle: [u8; 32] = buf[32..64].try_into().unwrap();
+                            let meta: Value<Handle<Blake3, SimpleArchive>> = Value::new(raw_handle);
+                            let meta_present = reader.metadata(meta)?.is_some();
+
+                            let mut head: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
+                            let mut head_present: Option<bool> = None;
+                            let mut name: Option<String> = None;
+                            if meta_present {
+                                if let Ok(meta_set) = reader.get::<TribleSet, SimpleArchive>(meta) {
+                                    name = load_branch_name(&reader, &meta_set).ok().flatten();
+                                    head = extract_repo_head(&meta_set);
+                                    if let Some(h) = head {
+                                        head_present = Some(reader.metadata(h)?.is_some());
+                                    }
+                                }
+                            }
+
+                            if entries.len() == limit {
+                                entries.pop_front();
+                            }
+                            entries.push_back(Entry {
+                                offset,
+                                kind: Kind::Set,
+                                meta: Some(meta),
+                                meta_present,
+                                head,
+                                head_present,
+                                name,
+                            });
+                        }
+
+                        offset += RECORD_LEN;
+                        continue;
+                    }
+
+                    if magic == MAGIC_MARKER_BRANCH_TOMBSTONE.raw() {
+                        let raw_id: [u8; 16] = buf[16..32].try_into().unwrap();
+                        let Some(id) = Id::new(raw_id) else {
+                            break;
+                        };
+
+                        if id == branch_id {
+                            if entries.len() == limit {
+                                entries.pop_front();
+                            }
+                            entries.push_back(Entry {
+                                offset,
+                                kind: Kind::Delete,
+                                meta: None,
+                                meta_present: false,
+                                head: None,
+                                head_present: None,
+                                name: None,
+                            });
+                        }
+
+                        offset += RECORD_LEN;
+                        continue;
+                    }
+
+                    // Unknown marker or torn tail.
                     break;
                 }
 
-                let magic: [u8; 16] = buf[0..16].try_into().unwrap();
-                if magic == MAGIC_MARKER_BLOB.raw() {
-                    // Skip blob payload without reading it.
-                    let len = u64::from_ne_bytes(buf[24..32].try_into().unwrap());
-                    let pad = blob_padding(len);
-                    offset = offset
-                        .checked_add(RECORD_LEN)
-                        .and_then(|o| o.checked_add(len))
-                        .and_then(|o| o.checked_add(pad))
-                        .ok_or_else(|| anyhow::anyhow!("pile too large"))?;
-                    continue;
-                }
-
-                if magic == MAGIC_MARKER_BRANCH.raw() {
-                    let raw_id: [u8; 16] = buf[16..32].try_into().unwrap();
-                    let Some(id) = Id::new(raw_id) else {
-                        // Nil/invalid branch id => corrupt record; stop.
-                        break;
+                // Print latest first, like git's reflog.
+                for (idx, entry) in entries.iter().rev().enumerate() {
+                    let offset = entry.offset;
+                    let kind = match entry.kind {
+                        Kind::Set => "set",
+                        Kind::Delete => "delete",
                     };
 
-                    if id == branch_id {
-                        let raw_handle: [u8; 32] = buf[32..64].try_into().unwrap();
-                        let meta: Value<Handle<Blake3, SimpleArchive>> = Value::new(raw_handle);
-                        let meta_present = reader.metadata(meta)?.is_some();
-
-                        let mut head: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
-                        let mut head_present: Option<bool> = None;
-                        let mut name: Option<String> = None;
-                        if meta_present {
-                            if let Ok(meta_set) = reader.get::<TribleSet, SimpleArchive>(meta) {
-                                name = load_branch_name(&reader, &meta_set).ok().flatten();
-                                head = extract_repo_head(&meta_set);
-                                if let Some(h) = head {
-                                    head_present = Some(reader.metadata(h)?.is_some());
-                                }
-                            }
-                        }
-
-                        if entries.len() == limit {
-                            entries.pop_front();
-                        }
-                        entries.push_back(Entry {
-                            offset,
-                            kind: Kind::Set,
-                            meta: Some(meta),
-                            meta_present,
-                            head,
-                            head_present,
-                            name,
-                        });
-                    }
-
-                    offset += RECORD_LEN;
-                    continue;
-                }
-
-                if magic == MAGIC_MARKER_BRANCH_TOMBSTONE.raw() {
-                    let raw_id: [u8; 16] = buf[16..32].try_into().unwrap();
-                    let Some(id) = Id::new(raw_id) else {
-                        break;
+                    let meta = match entry.meta {
+                        None => "-".to_string(),
+                        Some(h) => format!("blake3:{}", hex::encode(h.raw)),
+                    };
+                    let head = match entry.head {
+                        None => "-".to_string(),
+                        Some(h) => format!("blake3:{}", hex::encode(h.raw)),
+                    };
+                    let name = entry.name.as_deref().unwrap_or("-");
+                    let meta_state = if entry.meta.is_none() {
+                        "-"
+                    } else if entry.meta_present {
+                        "present"
+                    } else {
+                        "missing"
+                    };
+                    let head_state = match entry.head_present {
+                        None => "-",
+                        Some(true) => "present",
+                        Some(false) => "missing",
                     };
 
-                    if id == branch_id {
-                        if entries.len() == limit {
-                            entries.pop_front();
-                        }
-                        entries.push_back(Entry {
-                            offset,
-                            kind: Kind::Delete,
-                            meta: None,
-                            meta_present: false,
-                            head: None,
-                            head_present: None,
-                            name: None,
-                        });
-                    }
-
-                    offset += RECORD_LEN;
-                    continue;
+                    println!(
+                        "{idx}\toffset={offset}\t{kind}\tmeta={meta}\tmeta[{meta_state}]\thead={head}\thead[{head_state}]\tname={name}"
+                    );
                 }
+                Ok(())
+            })();
 
-                // Unknown marker or torn tail.
-                break;
-            }
-
-            // Print latest first, like git's reflog.
-            for (idx, entry) in entries.iter().rev().enumerate() {
-                let offset = entry.offset;
-                let kind = match entry.kind {
-                    Kind::Set => "set",
-                    Kind::Delete => "delete",
-                };
-
-                let meta = match entry.meta {
-                    None => "-".to_string(),
-                    Some(h) => format!("blake3:{}", hex::encode(h.raw)),
-                };
-                let head = match entry.head {
-                    None => "-".to_string(),
-                    Some(h) => format!("blake3:{}", hex::encode(h.raw)),
-                };
-                let name = entry.name.as_deref().unwrap_or("-");
-                let meta_state = if entry.meta.is_none() {
-                    "-"
-                } else if entry.meta_present {
-                    "present"
-                } else {
-                    "missing"
-                };
-                let head_state = match entry.head_present {
-                    None => "-",
-                    Some(true) => "present",
-                    Some(false) => "missing",
-                };
-
-                println!(
-                    "{idx}\toffset={offset}\t{kind}\tmeta={meta}\tmeta[{meta_state}]\thead={head}\thead[{head_state}]\tname={name}"
-                );
-            }
-
-            pile_reader
+            let close_res = pile_reader
                 .close()
-                .map_err(|e| anyhow::anyhow!("close pile: {e:?}"))?;
+                .map_err(|e| anyhow::anyhow!("close pile: {e:?}"));
+            res.and(close_res)?;
         }
         Command::Journal {
             pile,
@@ -712,14 +723,15 @@ pub fn run(cmd: Command) -> Result<()> {
             use triblespace_core::value::Value;
 
             let mut pile_reader: Pile<Blake3> = Pile::open(&pile)?;
-            // Ensure indices are loaded; metadata lookups below rely on it.
-            pile_reader.refresh()?;
-            let reader = pile_reader
-                .reader()
-                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
+            let res = (|| -> Result<(), anyhow::Error> {
+                // Ensure indices are loaded; metadata lookups below rely on it.
+                pile_reader.refresh()?;
+                let reader = pile_reader
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
 
-            let mut file = std::fs::File::open(&pile)?;
-            let file_len = file.metadata()?.len();
+                let mut file = std::fs::File::open(&pile)?;
+                let file_len = file.metadata()?.len();
 
             #[derive(Clone, Copy, Debug, PartialEq, Eq)]
             enum Kind {
@@ -808,11 +820,11 @@ pub fn run(cmd: Command) -> Result<()> {
             let mut rows: Vec<(Id, State)> = states.into_iter().collect();
             rows.sort_by(|(_a_id, a), (_b_id, b)| b.offset.cmp(&a.offset));
 
-            let mut printed: usize = 0;
-            for (id, state) in rows {
-                if deleted && state.kind != Kind::Delete {
-                    continue;
-                }
+                let mut printed: usize = 0;
+                for (id, state) in rows {
+                    if deleted && state.kind != Kind::Delete {
+                        continue;
+                    }
 
                 let meta_handle: Option<Value<Handle<Blake3, SimpleArchive>>> = match state.kind {
                     Kind::Set => state.meta,
@@ -869,15 +881,18 @@ pub fn run(cmd: Command) -> Result<()> {
 
                 println!("{id:X}\t{kind}\t{meta}\t{meta_state}\t{head}\t{head_state}\t{name}",);
 
-                printed += 1;
-                if printed >= limit {
-                    break;
+                    printed += 1;
+                    if printed >= limit {
+                        break;
+                    }
                 }
-            }
+                Ok(())
+            })();
 
-            pile_reader
+            let close_res = pile_reader
                 .close()
-                .map_err(|e| anyhow::anyhow!("close pile: {e:?}"))?;
+                .map_err(|e| anyhow::anyhow!("close pile: {e:?}"));
+            res.and(close_res)?;
         }
         Command::Export {
             from_pile,
@@ -893,62 +908,92 @@ pub fn run(cmd: Command) -> Result<()> {
             let bid = parse_branch_id_hex(&branch)?;
 
             let mut src: Pile<Blake3> = Pile::open(&from_pile)?;
-            let mut dst: Pile<Blake3> = Pile::open(&to_pile)?;
+            let mut dst: Pile<Blake3> = match Pile::open(&to_pile) {
+                Ok(pile) => pile,
+                Err(err) => {
+                    let _ = src.close();
+                    return Err(err.into());
+                }
+            };
 
-            // Obtain the source branch metadata handle (root) and ensure it exists.
-            let src_meta = src
-                .head(bid)?
-                .ok_or_else(|| anyhow::anyhow!("source branch head not found"))?;
+            let res = (|| -> Result<(), anyhow::Error> {
+                // Obtain the source branch metadata handle (root) and ensure it exists.
+                let src_meta = src
+                    .head(bid)?
+                    .ok_or_else(|| anyhow::anyhow!("source branch head not found"))?;
 
-            // Prepare a mapping from source handle raw -> destination handle for later lookup.
-            use std::collections::HashMap;
-            use triblespace_core::value::VALUE_LEN;
-            let mut mapping: HashMap<[u8; VALUE_LEN], Value<Handle<Blake3, _>>> = HashMap::new();
+                // Prepare a mapping from source handle raw -> destination handle for later lookup.
+                use std::collections::HashMap;
+                use triblespace_core::value::VALUE_LEN;
+                let mut mapping: HashMap<[u8; VALUE_LEN], Value<Handle<Blake3, _>>> =
+                    HashMap::new();
 
-            let src_reader = src
-                .reader()
-                .map_err(|e| anyhow::anyhow!("src pile reader error: {e:?}"))?;
-            let handles = repo::reachable(&src_reader, std::iter::once(src_meta.transmute()));
+                let src_reader = src
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("src pile reader error: {e:?}"))?;
+                let handles = repo::reachable(&src_reader, std::iter::once(src_meta.transmute()));
 
-            let mut visited: usize = 0;
-            let mut stored: usize = 0;
-            for r in repo::transfer(&src_reader, &mut dst, handles) {
-                match r {
-                    Ok((src_h, dst_h)) => {
-                        visited += 1;
-                        stored += 1;
-                        mapping.insert(src_h.raw, dst_h);
+                let mut visited: usize = 0;
+                let mut stored: usize = 0;
+                for r in repo::transfer(&src_reader, &mut dst, handles) {
+                    match r {
+                        Ok((src_h, dst_h)) => {
+                            visited += 1;
+                            stored += 1;
+                            mapping.insert(src_h.raw, dst_h);
+                        }
+                        Err(e) => return Err(anyhow::anyhow!("transfer failed: {e}")),
                     }
-                    Err(e) => return Err(anyhow::anyhow!("transfer failed: {e}")),
                 }
-            }
 
-            // Find the destination handle corresponding to the source branch meta.
-            let dst_meta = mapping
-                .get(&src_meta.raw)
-                .ok_or_else(|| anyhow::anyhow!("destination meta handle not found after transfer"))?
-                .clone();
+                // Find the destination handle corresponding to the source branch meta.
+                let dst_meta = mapping
+                    .get(&src_meta.raw)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("destination meta handle not found after transfer")
+                    })?
+                    .clone();
 
-            // Update the destination pile branch pointer to the copied meta handle.
-            let old = dst.head(bid)?;
-            let res = dst
-                .update(bid, old, Some(dst_meta.transmute()))
-                .map_err(|e| anyhow::anyhow!("destination branch update failed: {e:?}"))?;
+                // Update the destination pile branch pointer to the copied meta handle.
+                let old = dst.head(bid)?;
+                let res = dst
+                    .update(bid, old, Some(dst_meta.transmute()))
+                    .map_err(|e| anyhow::anyhow!("destination branch update failed: {e:?}"))?;
+                match res {
+                    triblespace_core::repo::PushResult::Success() => {
+                        println!(
+                            "export: copied visited={} stored={} and set branch {:#X}",
+                            visited, stored, bid
+                        );
+                    }
+                    triblespace_core::repo::PushResult::Conflict(existing) => {
+                        println!("export: copied visited={} stored={} but branch update conflicted: existing={:?}", visited, stored, existing);
+                    }
+                }
+                Ok(())
+            })();
+
+            let close_src = src.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+            let close_dst = dst.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+
             match res {
-                triblespace_core::repo::PushResult::Success() => {
-                    println!(
-                        "export: copied visited={} stored={} and set branch {:#X}",
-                        visited, stored, bid
-                    );
+                Ok(()) => {
+                    close_src?;
+                    close_dst?;
+                    Ok(())
                 }
-                triblespace_core::repo::PushResult::Conflict(existing) => {
-                    println!("export: copied visited={} stored={} but branch update conflicted: existing={:?}", visited, stored, existing);
+                Err(err) => {
+                    if let Err(close_err) = close_src {
+                        eprintln!("warning: failed to close source pile cleanly: {close_err:#}");
+                    }
+                    if let Err(close_err) = close_dst {
+                        eprintln!(
+                            "warning: failed to close destination pile cleanly: {close_err:#}"
+                        );
+                    }
+                    Err(err)
                 }
-            }
-
-            // Close piles explicitly.
-            src.close().map_err(|e| anyhow::anyhow!("{e:?}"))?;
-            dst.close().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            }?;
         }
         Command::Stats { pile, branch } => {
             use std::collections::{BTreeSet, HashSet};
@@ -1086,30 +1131,26 @@ pub fn run(cmd: Command) -> Result<()> {
             use triblespace_core::value::schemas::hash::Handle;
             use triblespace_core::value::Value;
 
-            let mut src: Pile<Blake3> = Pile::open(&from_pile)?;
-            let mut dst: Pile<Blake3> = Pile::open(&to_pile)?;
-
-            // Simple stats struct to report how many handles were visited and
-            // how many were actually stored on the destination. This replaces
-            // the old `repo::copy_reachable` helper which was removed when the
-            // transfer API was made more modular.
             struct CopyStats {
                 visited: usize,
                 stored: usize,
             }
 
-            // We'll perform the potentially-failing copy step inside a closure
-            // and capture the results in locals so we can ensure both piles are
-            // explicitly closed whether the operation succeeds or fails.
-            let mut src_bid_opt: Option<Id> = None;
-            let mut dst_bid_opt: Option<Id> = None;
-            let mut src_head_opt: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
-            let mut stats_opt: Option<_> = None;
+            let src_bid = parse_branch_id_hex(&from_id)?;
+            let dst_bid = parse_branch_id_hex(&to_id)?;
+            let key = load_signing_key(&signing_key)?;
 
-            let pre_res = (|| -> Result<(), anyhow::Error> {
-                let src_bid = parse_branch_id_hex(&from_id)?;
-                let dst_bid = parse_branch_id_hex(&to_id)?;
+            let mut src: Pile<Blake3> = Pile::open(&from_pile)?;
+            let dst_pile: Pile<Blake3> = match Pile::open(&to_pile) {
+                Ok(pile) => pile,
+                Err(err) => {
+                    let _ = src.close();
+                    return Err(err.into());
+                }
+            };
 
+            let mut repo = Repository::new(dst_pile, key);
+            let result = (|| -> Result<CopyStats, anyhow::Error> {
                 let src_head: Value<Handle<Blake3, SimpleArchive>> = src
                     .head(src_bid)?
                     .ok_or_else(|| anyhow::anyhow!("source branch head not found"))?;
@@ -1118,77 +1159,66 @@ pub fn run(cmd: Command) -> Result<()> {
                     .reader()
                     .map_err(|e| anyhow::anyhow!("src pile reader error: {e:?}"))?;
 
-                // Walk reachable handles starting from the source head and
-                // transfer them into the destination pile. Aggregate simple
-                // stats along the way so the CLI can report progress.
+                let handles = repo::reachable(&src_reader, std::iter::once(src_head.transmute()));
                 let mut visited: usize = 0;
                 let mut stored: usize = 0;
-                let handles = repo::reachable(&src_reader, std::iter::once(src_head.transmute()));
-                for r in repo::transfer(&src_reader, &mut dst, handles) {
+                for r in repo::transfer(&src_reader, repo.storage_mut(), handles) {
                     match r {
-                        Ok((_src, _dst)) => {
+                        Ok((_src_h, _dst_h)) => {
                             visited += 1;
                             stored += 1;
                         }
                         Err(e) => return Err(anyhow::anyhow!("transfer failed: {e}")),
                     }
                 }
-                let stats = CopyStats { visited, stored };
 
-                src_bid_opt = Some(src_bid);
-                dst_bid_opt = Some(dst_bid);
-                src_head_opt = Some(src_head);
-                stats_opt = Some(stats);
-                Ok(())
+                let mut ws = repo
+                    .pull(dst_bid)
+                    .map_err(|e| anyhow::anyhow!("failed to open destination branch: {e:?}"))?;
+                ws.merge_commit(src_head)
+                    .map_err(|e| anyhow::anyhow!("merge failed: {e:?}"))?;
+
+                while let Some(mut incoming) = repo
+                    .try_push(&mut ws)
+                    .map_err(|e| anyhow::anyhow!("push failed: {e:?}"))?
+                {
+                    incoming
+                        .merge(&mut ws)
+                        .map_err(|e| anyhow::anyhow!("merge conflict: {e:?}"))?;
+                    ws = incoming;
+                }
+
+                Ok(CopyStats { visited, stored })
             })();
 
-            if let Err(e) = pre_res {
-                // Best-effort close of opened piles in case of early failure.
-                let _ = src.close();
-                let _ = dst.close();
-                return Err(e);
-            }
-
-            // Safe to unwrap because pre_res succeeded.
-            let _src_bid = src_bid_opt.unwrap();
-            let dst_bid = dst_bid_opt.unwrap();
-            let src_head = src_head_opt.unwrap();
-            let stats = stats_opt.unwrap();
-
-            // Close the source pile now that we've finished reading from it.
-            src.close().map_err(|e| anyhow::anyhow!("{e:?}"))?;
-
-            // `dst` has been moved into the repository below; create the repo and
-            // run merging operations, then ensure the destination storage is
-            // explicitly closed via `into_storage().close()`.
-            // Load signing key for destination repo (cli flag > env var > generated)
-            let key = load_signing_key(&signing_key)?;
-            let mut repo = Repository::new(dst, key);
-            let mut ws = repo
-                .pull(dst_bid)
-                .map_err(|e| anyhow::anyhow!("failed to open destination branch: {e:?}"))?;
-            ws.merge_commit(src_head)
-                .map_err(|e| anyhow::anyhow!("merge failed: {e:?}"))?;
-
-            while let Some(mut incoming) = repo
-                .try_push(&mut ws)
-                .map_err(|e| anyhow::anyhow!("push failed: {e:?}"))?
-            {
-                incoming
-                    .merge(&mut ws)
-                    .map_err(|e| anyhow::anyhow!("merge conflict: {e:?}"))?;
-                ws = incoming;
-            }
-
-            // Ensure the destination pile (now owned by `repo`) is closed.
-            repo.into_storage()
+            let close_src = src.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+            let close_dst = repo
+                .into_storage()
                 .close()
-                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+                .map_err(|e| anyhow::anyhow!("{e:?}"));
 
-            println!(
-                "merge-import: copied visited={} stored={} and attached source head to destination branch",
-                stats.visited, stats.stored
-            );
+            match result {
+                Ok(stats) => {
+                    close_src?;
+                    close_dst?;
+                    println!(
+                        "merge-import: copied visited={} stored={} and attached source head to destination branch",
+                        stats.visited, stats.stored
+                    );
+                    Ok(())
+                }
+                Err(err) => {
+                    if let Err(close_err) = close_src {
+                        eprintln!("warning: failed to close source pile cleanly: {close_err:#}");
+                    }
+                    if let Err(close_err) = close_dst {
+                        eprintln!(
+                            "warning: failed to close destination pile cleanly: {close_err:#}"
+                        );
+                    }
+                    Err(err)
+                }
+            }?;
         }
         Command::Consolidate {
             pile,
@@ -1197,130 +1227,124 @@ pub fn run(cmd: Command) -> Result<()> {
             dry_run,
             signing_key,
         } => {
+            use std::collections::HashSet;
+
             use triblespace::prelude::blobschemas::SimpleArchive;
+            use triblespace::prelude::BlobStorePut;
             use triblespace_core::repo::pile::Pile;
             use triblespace_core::repo::Repository;
             use triblespace_core::trible::TribleSet;
             use triblespace_core::value::schemas::hash::Blake3;
-            use triblespace_core::value::schemas::hash::Handle;
+            use triblespace_core::value::schemas::hash::Hash;
             use triblespace_core::value::Value;
-            // Trait imports required for method resolution
-            use triblespace::prelude::BlobStorePut;
 
-            let mut pile: Pile<Blake3> = Pile::open(&pile)?;
-
-            // Ensure in-memory indices are populated.
-            pile.refresh()?;
-
-            let reader = pile
-                .reader()
-                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
-
-            // Attribute ids used in branch metadata.
-            let repo_head_attr: triblespace_core::id::Id =
-                id_hex!("272FBC56108F336C4D2E17289468C35F");
-
-            // Collect all branch ids and their current heads.
-            let mut candidates: Vec<(
-                triblespace_core::id::Id,
-                Option<Value<Handle<Blake3, SimpleArchive>>>,
-            )> = Vec::new();
-            let mut seen = std::collections::HashSet::<Id>::new();
+            // Parse branch ids before opening the pile so CLI errors don't leave files open.
+            let mut seen: HashSet<Id> = HashSet::new();
+            let mut branch_ids: Vec<Id> = Vec::new();
             for raw in branches {
                 let bid = parse_branch_id_hex(&raw)?;
-                if !seen.insert(bid) {
-                    continue;
+                if seen.insert(bid) {
+                    branch_ids.push(bid);
                 }
+            }
 
-                let meta_handle = pile
-                    .head(bid)?
-                    .ok_or_else(|| anyhow::anyhow!("branch not found: {bid:X}"))?;
+            let key = load_signing_key(&signing_key)?;
+            let pile: Pile<Blake3> = Pile::open(&pile)?;
+            let mut repo = Repository::new(pile, key.clone());
 
-                let mut head_val: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
-                if reader.metadata(meta_handle)?.is_some() {
-                    if let Ok(meta) = reader.get::<TribleSet, SimpleArchive>(meta_handle) {
-                        for t in meta.iter() {
-                            if t.a() == &repo_head_attr {
-                                head_val = Some(*t.v::<Handle<Blake3, SimpleArchive>>());
-                                break;
+            let res = (|| -> Result<(), anyhow::Error> {
+                // Ensure in-memory indices are populated.
+                repo.storage_mut().refresh()?;
+                let reader = repo
+                    .storage_mut()
+                    .reader()
+                    .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
+
+                // Attribute ids used in branch metadata.
+                let repo_head_attr: triblespace_core::id::Id =
+                    id_hex!("272FBC56108F336C4D2E17289468C35F");
+
+                // Collect all branch ids and their current heads.
+                let mut candidates: Vec<(Id, Option<Value<Handle<Blake3, SimpleArchive>>>)> =
+                    Vec::new();
+                for bid in branch_ids {
+                    let meta_handle = repo
+                        .storage_mut()
+                        .head(bid)?
+                        .ok_or_else(|| anyhow::anyhow!("branch not found: {bid:X}"))?;
+
+                    let mut head_val: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
+                    if reader.metadata(meta_handle)?.is_some() {
+                        if let Ok(meta) = reader.get::<TribleSet, SimpleArchive>(meta_handle) {
+                            for t in meta.iter() {
+                                if t.a() == &repo_head_attr {
+                                    head_val = Some(*t.v::<Handle<Blake3, SimpleArchive>>());
+                                    break;
+                                }
                             }
                         }
                     }
+
+                    candidates.push((bid, head_val));
                 }
 
-                candidates.push((bid, head_val));
-            }
-
-            if candidates.is_empty() {
-                println!("no branches provided");
-                let _ = pile.close();
-                return Ok(());
-            }
-
-            println!("found {} branch(es)", candidates.len());
-            for (bid, head) in &candidates {
-                let id_hex = format!("{bid:X}");
-                if let Some(h) = head {
-                    let hh: Value<triblespace_core::value::schemas::hash::Hash<Blake3>> =
-                        Handle::to_hash(*h);
-                    let hex: String = hh.from_value();
-                    println!("- {id_hex} -> commit blake3:{hex}");
-                } else {
-                    println!("- {id_hex} -> <no head>");
+                println!("found {} branch(es)", candidates.len());
+                for (bid, head) in &candidates {
+                    let id_hex = format!("{bid:X}");
+                    if let Some(h) = head {
+                        let hh: Value<Hash<Blake3>> = Handle::to_hash(*h);
+                        let hex: String = hh.from_value();
+                        println!("- {id_hex} -> commit blake3:{hex}");
+                    } else {
+                        println!("- {id_hex} -> <no head>");
+                    }
                 }
-            }
 
-            if dry_run {
-                println!("dry-run: no changes will be made");
-                let _ = pile.close();
-                return Ok(());
-            }
+                if dry_run {
+                    println!("dry-run: no changes will be made");
+                    return Ok(());
+                }
 
-            if candidates.len() == 1 {
-                println!("only one branch present; nothing to consolidate");
-                let _ = pile.close();
-                return Ok(());
-            }
+                if candidates.len() == 1 {
+                    println!("only one branch present; nothing to consolidate");
+                    return Ok(());
+                }
 
-            // Collect parent commit handles (skip branches without a head)
-            let parents: Vec<Value<Handle<Blake3, SimpleArchive>>> =
-                candidates.iter().filter_map(|(_, h)| *h).collect();
+                // Collect parent commit handles (skip branches without a head).
+                let parents: Vec<Value<Handle<Blake3, SimpleArchive>>> =
+                    candidates.iter().filter_map(|(_, h)| *h).collect();
+                if parents.is_empty() {
+                    anyhow::bail!("no branch heads available to attach");
+                }
 
-            if parents.is_empty() {
-                let _ = pile.close();
-                anyhow::bail!("no branch heads available to attach");
-            }
+                // Create a single merge commit that has all branch heads as parents.
+                let commit_set = triblespace_core::repo::commit::commit_metadata(
+                    &key,
+                    parents.clone(),
+                    None,
+                    None,
+                    None,
+                );
+                let commit_handle = repo
+                    .storage_mut()
+                    .put(commit_set.to_blob())
+                    .map_err(|e| anyhow::anyhow!("failed to put commit blob: {e:?}"))?;
 
-            // Create a single merge commit that has all branch heads as parents.
-            let signing_key = load_signing_key(&signing_key)?;
-            let commit_set = triblespace_core::repo::commit::commit_metadata(
-                &signing_key,
-                parents.clone(),
-                None,
-                None,
-                None,
-            );
-            let commit_blob = commit_set.to_blob();
+                // Decide output branch name.
+                let out = out_name.unwrap_or_else(|| "consolidated".to_string());
 
-            // Decide output branch name.
-            let out = out_name.unwrap_or_else(|| "consolidated".to_string());
+                let new_id = *repo
+                    .create_branch_with_key(&out, Some(commit_handle), key.clone())
+                    .map_err(|e| anyhow::anyhow!("failed to create consolidated branch: {e:?}"))?;
+                println!("created consolidated branch '{out}' with id {new_id:X}");
+                Ok(())
+            })();
 
-            // Store the commit blob in the pile before creating the branch.
-            let commit_handle = pile
-                .put(commit_blob)
-                .map_err(|e| anyhow::anyhow!("failed to put commit blob: {e:?}"))?;
-
-            // Move the pile into a Repository so we can atomically create the branch.
-            let mut repo = Repository::new(pile, signing_key.clone());
-            let new_id = *repo
-                .create_branch_with_key(&out, Some(commit_handle), signing_key)
-                .map_err(|e| anyhow::anyhow!("failed to create consolidated branch: {e:?}"))?;
-
-            repo.into_storage()
+            let close_res = repo
+                .into_storage()
                 .close()
-                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-
-            println!("created consolidated branch '{out}' with id {new_id:X}");
+                .map_err(|e| anyhow::anyhow!("{e:?}"));
+            res.and(close_res)?;
         }
     }
     Ok(())

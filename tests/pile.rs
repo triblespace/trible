@@ -71,6 +71,7 @@ fn delete_branch_removes_branch_id_from_list() {
     let mut pile: Pile<Blake3> = Pile::open(&path).unwrap();
     pile.refresh().unwrap();
     assert_eq!(pile.head(branch_id).unwrap(), None);
+    pile.close().unwrap();
 }
 
 #[test]
@@ -90,6 +91,7 @@ fn create_initializes_empty_pile() {
     pile.refresh().unwrap();
     let mut iter = pile.branches().unwrap();
     assert!(iter.next().is_none());
+    pile.close().unwrap();
 }
 
 #[test]
@@ -138,6 +140,8 @@ fn put_ingests_file() {
     let mut pile: Pile<Blake3> = Pile::open(&pile_path).unwrap();
     let reader = pile.reader().unwrap();
     assert!(reader.blobs().next().is_some());
+    drop(reader);
+    pile.close().unwrap();
 }
 
 #[test]
@@ -324,27 +328,27 @@ fn inspect_outputs_tribles() {
     let dataset = examples::dataset();
     let blob = dataset.to_blob();
 
-    {
+    let handle_str = {
         let mut pile: Pile<Blake3> = Pile::open(&pile_path).unwrap();
         let handle = pile.put(blob).unwrap();
-        pile.flush().unwrap();
+        pile.close().unwrap();
 
         let hash = Handle::to_hash(handle);
-        let handle_str: String = hash.from_value();
+        hash.from_value::<String>()
+    };
 
-        Command::cargo_bin("trible")
-            .unwrap()
-            .args([
-                "pile",
-                "blob",
-                "inspect",
-                pile_path.to_str().unwrap(),
-                &handle_str,
-            ])
-            .assert()
-            .success()
-            .stdout(predicate::str::contains("Length:"));
-    }
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "blob",
+            "inspect",
+            pile_path.to_str().unwrap(),
+            &handle_str,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Length:"));
 }
 
 #[test]
