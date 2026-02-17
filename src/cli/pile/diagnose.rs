@@ -133,31 +133,33 @@ fn check(pile_path: &Path, fail_fast: bool) -> Result<()> {
                                 )
                             }
                         };
-                        let mut content_ok = false;
+                        let mut content_handle: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
                         let mut parents: Vec<Value<Handle<Blake3, SimpleArchive>>> = Vec::new();
                         for t in meta.iter() {
                             if t.a() == &repo_content_attr {
-                                let c = *t.v::<Handle<Blake3, SimpleArchive>>();
-                                match reader.metadata(c) {
-                                    Ok(Some(_)) => {
-                                        content_ok = true;
-                                    }
-                                    Ok(None) => {}
-                                    Err(e) => {
-                                        return (
-                                            count,
-                                            Some(format!(
-                                                "commit blake3:{hex} metadata error: {e:?}"
-                                            )),
-                                        );
-                                    }
-                                }
+                                content_handle = Some(*t.v::<Handle<Blake3, SimpleArchive>>());
                             } else if t.a() == &repo_parent_attr {
                                 parents.push(*t.v::<Handle<Blake3, SimpleArchive>>());
                             }
                         }
-                        if !content_ok {
-                            return (count, Some(format!("commit blake3:{hex} content blob missing")));
+                        // Some commits (for example merge-only commits) intentionally do not carry
+                        // a content blob. Only verify content existence when present.
+                        if let Some(c) = content_handle {
+                            match reader.metadata(c) {
+                                Ok(Some(_)) => {}
+                                Ok(None) => {
+                                    return (
+                                        count,
+                                        Some(format!("commit blake3:{hex} content blob missing")),
+                                    );
+                                }
+                                Err(e) => {
+                                    return (
+                                        count,
+                                        Some(format!("commit blake3:{hex} metadata error: {e:?}")),
+                                    );
+                                }
+                            }
                         }
                         for p in parents {
                             stack.push(p);
@@ -176,11 +178,7 @@ fn check(pile_path: &Path, fail_fast: bool) -> Result<()> {
                     let id_hex = format!("{bid:X}");
                     match meta_handle_opt {
                         None => {
-                            println!("- {id_hex}: no branch metadata head set");
-                            if fail_fast {
-                                anyhow::bail!("no branch metadata head set for {id_hex}");
-                            }
-                            any_error = true;
+                            println!("- {id_hex}: <no branch metadata head set>");
                         }
                         Some(meta_handle) => {
                             let meta_present = reader.metadata(meta_handle)?.is_some();
@@ -231,6 +229,20 @@ fn check(pile_path: &Path, fail_fast: bool) -> Result<()> {
                                         .unwrap_or_default()
                                 );
                             }
+                            if !meta_present {
+                                if fail_fast {
+                                    anyhow::bail!("branch metadata blob missing for {id_hex}");
+                                }
+                                any_error = true;
+                                continue;
+                            }
+                            if meta_err.is_some() {
+                                if fail_fast {
+                                    anyhow::bail!("branch metadata decode failed for {id_hex}");
+                                }
+                                any_error = true;
+                                continue;
+                            }
                             if let Some(head) = head_val {
                                 let (count, err) =
                                     verify_chain(&reader, head, repo_parent_attr, repo_content_attr);
@@ -245,10 +257,6 @@ fn check(pile_path: &Path, fail_fast: bool) -> Result<()> {
                                 }
                             } else {
                                 println!("  no head set");
-                                if fail_fast {
-                                    anyhow::bail!("no head set for {id_hex}");
-                                }
-                                any_error = true;
                             }
                         }
                     }
