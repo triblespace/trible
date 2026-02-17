@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
@@ -67,6 +67,22 @@ pub enum Command {
         /// Branch identifier to delete (hex encoded)
         branch: String,
     },
+    /// Set the branch metadata handle for a branch in a pile (CAS update).
+    ///
+    /// This updates the branch store head to point at the provided branch
+    /// metadata blob handle. The pile does not verify that the referenced blob
+    /// exists (head-only piles are allowed).
+    Set {
+        /// Path to the pile file to modify
+        pile: PathBuf,
+        /// Branch identifier to set (hex encoded)
+        branch: String,
+        /// Branch metadata blob handle (64 hex chars, optionally prefixed with `blake3:`)
+        meta: String,
+        /// Expected current branch metadata blob handle (CAS). Uses current head when omitted.
+        #[arg(long)]
+        expected: Option<String>,
+    },
     /// Scan the pile for historical branch metadata entries for this branch.
     /// This lists candidate metadata blobs that reference the branch id.
     History {
@@ -90,6 +106,21 @@ pub enum Command {
         /// Maximum results to print
         #[arg(long, default_value_t = 50)]
         limit: usize,
+    },
+    /// List branch identifiers seen in the pile file, including deleted branches.
+    ///
+    /// This scans the pile file for branch update/tombstone records and reports
+    /// the most recent entry per branch id. Use `--deleted` to only show
+    /// currently tombstoned branch ids.
+    Journal {
+        /// Path to the pile file to inspect
+        pile: PathBuf,
+        /// Maximum results to print
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+        /// Only show branches that are currently deleted (tombstoned)
+        #[arg(long)]
+        deleted: bool,
     },
     /// Export a branch from one pile into another, copying reachable blobs.
     ///
@@ -366,6 +397,48 @@ pub fn run(cmd: Command) -> Result<()> {
             let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
             res.and(close_res)?;
         }
+        Command::Set {
+            pile,
+            branch,
+            meta,
+            expected,
+        } => {
+            use triblespace::prelude::blobschemas::SimpleArchive;
+            use triblespace::prelude::valueschemas::Handle;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::value::schemas::hash::Blake3;
+            use triblespace_core::value::Value;
+
+            let mut pile: Pile<Blake3> = Pile::open(&pile)?;
+            let res = (|| -> Result<(), anyhow::Error> {
+                let branch_id = parse_branch_id_hex(&branch)?;
+                let new_meta: Value<Handle<Blake3, SimpleArchive>> = parse_blake3_handle(&meta)?;
+
+                let expected_old: Option<Value<Handle<Blake3, SimpleArchive>>> = match expected {
+                    Some(s) => parse_blake3_handle_opt(&s)?,
+                    None => pile.head(branch_id)?,
+                };
+
+                match pile.update(branch_id, expected_old, Some(new_meta))? {
+                    triblespace_core::repo::PushResult::Success() => {
+                        println!(
+                            "set branch {bid:X} meta blake3:{meta}",
+                            bid = branch_id,
+                            meta = hex::encode(new_meta.raw)
+                        );
+                        Ok(())
+                    }
+                    triblespace_core::repo::PushResult::Conflict(existing) => {
+                        let got = existing
+                            .map(|h| format!("blake3:{}", hex::encode(h.raw)))
+                            .unwrap_or_else(|| "-".to_string());
+                        anyhow::bail!("branch head changed concurrently; current={got}")
+                    }
+                }
+            })();
+            let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+            res.and(close_res)?;
+        }
         Command::History {
             pile,
             branch,
@@ -620,6 +693,186 @@ pub fn run(cmd: Command) -> Result<()> {
                 println!(
                     "{idx}\toffset={offset}\t{kind}\tmeta={meta}\tmeta[{meta_state}]\thead={head}\thead[{head_state}]\tname={name}"
                 );
+            }
+
+            pile_reader
+                .close()
+                .map_err(|e| anyhow::anyhow!("close pile: {e:?}"))?;
+        }
+        Command::Journal {
+            pile,
+            limit,
+            deleted,
+        } => {
+            use triblespace::prelude::blobschemas::SimpleArchive;
+            use triblespace::prelude::valueschemas::Handle;
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::trible::TribleSet;
+            use triblespace_core::value::schemas::hash::Blake3;
+            use triblespace_core::value::Value;
+
+            let mut pile_reader: Pile<Blake3> = Pile::open(&pile)?;
+            // Ensure indices are loaded; metadata lookups below rely on it.
+            pile_reader.refresh()?;
+            let reader = pile_reader
+                .reader()
+                .map_err(|e| anyhow::anyhow!("pile reader error: {e:?}"))?;
+
+            let mut file = std::fs::File::open(&pile)?;
+            let file_len = file.metadata()?.len();
+
+            #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+            enum Kind {
+                Set,
+                Delete,
+            }
+
+            #[derive(Clone, Debug)]
+            struct State {
+                offset: u64,
+                kind: Kind,
+                // Most recent metadata handle (only when kind == Set).
+                meta: Option<Value<Handle<Blake3, SimpleArchive>>>,
+                // Most recent Set metadata handle (kept even after tombstone).
+                last_set: Option<Value<Handle<Blake3, SimpleArchive>>>,
+            }
+
+            let mut states: HashMap<Id, State> = HashMap::new();
+
+            let mut offset: u64 = 0;
+            let mut buf = [0u8; RECORD_LEN as usize];
+            while offset + RECORD_LEN <= file_len {
+                file.seek(SeekFrom::Start(offset))?;
+                if file.read_exact(&mut buf).is_err() {
+                    break;
+                }
+
+                let magic: [u8; 16] = buf[0..16].try_into().unwrap();
+                if magic == MAGIC_MARKER_BLOB.raw() {
+                    let len = u64::from_ne_bytes(buf[24..32].try_into().unwrap());
+                    let pad = blob_padding(len);
+                    offset = offset
+                        .checked_add(RECORD_LEN)
+                        .and_then(|o| o.checked_add(len))
+                        .and_then(|o| o.checked_add(pad))
+                        .ok_or_else(|| anyhow::anyhow!("pile too large"))?;
+                    continue;
+                }
+
+                if magic == MAGIC_MARKER_BRANCH.raw() {
+                    let raw_id: [u8; 16] = buf[16..32].try_into().unwrap();
+                    let Some(id) = Id::new(raw_id) else {
+                        break;
+                    };
+                    let raw_handle: [u8; 32] = buf[32..64].try_into().unwrap();
+                    let meta: Value<Handle<Blake3, SimpleArchive>> = Value::new(raw_handle);
+
+                    let entry = states.entry(id).or_insert(State {
+                        offset,
+                        kind: Kind::Set,
+                        meta: Some(meta),
+                        last_set: Some(meta),
+                    });
+                    entry.offset = offset;
+                    entry.kind = Kind::Set;
+                    entry.meta = Some(meta);
+                    entry.last_set = Some(meta);
+
+                    offset += RECORD_LEN;
+                    continue;
+                }
+
+                if magic == MAGIC_MARKER_BRANCH_TOMBSTONE.raw() {
+                    let raw_id: [u8; 16] = buf[16..32].try_into().unwrap();
+                    let Some(id) = Id::new(raw_id) else {
+                        break;
+                    };
+
+                    let entry = states.entry(id).or_insert(State {
+                        offset,
+                        kind: Kind::Delete,
+                        meta: None,
+                        last_set: None,
+                    });
+                    entry.offset = offset;
+                    entry.kind = Kind::Delete;
+                    entry.meta = None;
+
+                    offset += RECORD_LEN;
+                    continue;
+                }
+
+                break;
+            }
+
+            let mut rows: Vec<(Id, State)> = states.into_iter().collect();
+            rows.sort_by(|(_a_id, a), (_b_id, b)| b.offset.cmp(&a.offset));
+
+            let mut printed: usize = 0;
+            for (id, state) in rows {
+                if deleted && state.kind != Kind::Delete {
+                    continue;
+                }
+
+                let meta_handle: Option<Value<Handle<Blake3, SimpleArchive>>> = match state.kind {
+                    Kind::Set => state.meta,
+                    Kind::Delete => state.last_set,
+                };
+
+                let mut meta_present: bool = false;
+                let mut head: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
+                let mut head_present: Option<bool> = None;
+                let mut name: Option<String> = None;
+
+                let meta = match meta_handle {
+                    None => "-".to_string(),
+                    Some(h) => {
+                        meta_present = reader.metadata(h)?.is_some();
+                        if meta_present {
+                            if let Ok(meta_set) = reader.get::<TribleSet, SimpleArchive>(h) {
+                                name = load_branch_name(&reader, &meta_set).ok().flatten();
+                                head = extract_repo_head(&meta_set);
+                                if let Some(ch) = head {
+                                    head_present = Some(reader.metadata(ch)?.is_some());
+                                }
+                            }
+                        }
+                        format!("blake3:{}", hex::encode(h.raw))
+                    }
+                };
+
+                let kind = match state.kind {
+                    Kind::Set => "set",
+                    Kind::Delete => "delete",
+                };
+
+                let meta_state = if meta == "-" {
+                    "-"
+                } else if meta_present {
+                    "present"
+                } else {
+                    "missing"
+                };
+
+                let head_state = match head_present {
+                    None => "-",
+                    Some(true) => "present",
+                    Some(false) => "missing",
+                };
+
+                let head = match head {
+                    None => "-".to_string(),
+                    Some(h) => format!("blake3:{}", hex::encode(h.raw)),
+                };
+
+                let name = name.unwrap_or_else(|| "-".to_string());
+
+                println!("{id:X}\t{kind}\t{meta}\t{meta_state}\t{head}\t{head_state}\t{name}",);
+
+                printed += 1;
+                if printed >= limit {
+                    break;
+                }
             }
 
             pile_reader
@@ -1111,6 +1364,35 @@ fn parse_branch_id_hex(s: &str) -> Result<Id> {
         .try_into()
         .map_err(|_| anyhow::anyhow!("branch id must be 16 bytes (32 hex chars)"))?;
     Id::new(raw).ok_or_else(|| anyhow::anyhow!("branch id cannot be nil"))
+}
+
+fn parse_blake3_handle(s: &str) -> Result<Value<Handle<Blake3, SimpleArchive>>> {
+    let s = s.trim();
+    let hex = match s.split_once(':') {
+        Some((proto, rest)) => {
+            if proto.eq_ignore_ascii_case("blake3") {
+                rest
+            } else {
+                return Err(anyhow::anyhow!("unsupported handle protocol: {proto}"));
+            }
+        }
+        None => s,
+    };
+
+    let raw = hex::decode(hex).map_err(|e| anyhow::anyhow!("handle hex decode failed: {e}"))?;
+    let raw: [u8; 32] = raw
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("handle must be 32 bytes (64 hex chars)"))?;
+    Ok(Value::new(raw))
+}
+
+fn parse_blake3_handle_opt(s: &str) -> Result<Option<Value<Handle<Blake3, SimpleArchive>>>> {
+    let s = s.trim();
+    if s == "-" || s.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    Ok(Some(parse_blake3_handle(s)?))
 }
 
 fn load_branch_name(
