@@ -266,7 +266,7 @@ fn diagnose_reports_healthy() {
 
     Command::cargo_bin("trible")
         .unwrap()
-        .args(["pile", "diagnose", pile_path.to_str().unwrap()])
+        .args(["pile", "diagnose", "check", pile_path.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("healthy"));
@@ -306,7 +306,7 @@ fn diagnose_reports_invalid_hash() {
 
     Command::cargo_bin("trible")
         .unwrap()
-        .args(["pile", "diagnose", pile_path.to_str().unwrap()])
+        .args(["pile", "diagnose", "check", pile_path.to_str().unwrap()])
         .assert()
         .failure()
         .stdout(predicate::str::contains("incorrect hashes"));
@@ -314,7 +314,6 @@ fn diagnose_reports_invalid_hash() {
 
 #[test]
 fn inspect_outputs_tribles() {
-    use triblespace::prelude::blobschemas::SimpleArchive;
     use triblespace::prelude::*;
     use triblespace_core::examples;
     use triblespace_core::value::schemas::hash::Handle;
@@ -406,6 +405,7 @@ fn diagnose_locate_hash_reports_header_and_payload_refs() {
         .unwrap()
         .args([
             "pile",
+            "diagnose",
             "locate-hash",
             pile_path.to_str().unwrap(),
             &handle1,

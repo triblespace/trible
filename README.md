@@ -62,8 +62,8 @@ Run `trible <COMMAND>` to invoke a subcommand.
 ### Work with piles
 
 - `pile create <PATH>` — initialize an empty pile, creating parent directories as needed.
-- `pile diagnose <PILE>` — verify pile integrity.
-- `pile locate-hash <PILE> <HANDLE>` — scan raw pile bytes and report where a handle appears (blob header vs payload references).
+- `pile diagnose check <PILE>` — verify pile integrity.
+- `pile diagnose locate-hash <PILE> <HANDLE>` — scan raw pile bytes and report where a handle appears (blob header vs payload references).
 - `pile migrate <PILE> list` — list known migrations and whether they are needed for this pile.
 - `pile migrate <PILE> run [MIGRATION]` — run migrations (all by default). Pass `--dry-run` to preview changes.
 
