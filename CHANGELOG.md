@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `pile branch reflog` command to list historical branch head updates (including tombstones) stored in a pile file.
 - `pile branch journal` command to scan a pile for all branch update/tombstone records and report the latest state per branch id.
 - `pile branch set` command to CAS-update a branch head to a specific branch-metadata handle (useful for recovery).
+- `pile diagnose --locate-hash` to scan raw pile bytes and report where a blob handle appears (header vs payload references).
 
 ## [0.12.0] - 2026-02-09
 ### Changed

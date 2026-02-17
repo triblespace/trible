@@ -349,6 +349,78 @@ fn inspect_outputs_tribles() {
 }
 
 #[test]
+fn diagnose_locate_hash_reports_header_and_payload_refs() {
+    let dir = tempdir().unwrap();
+    let pile_path = dir.path().join("locate_hash.pile");
+
+    // Put blob1 and capture its handle string.
+    let blob1_path = dir.path().join("blob1.bin");
+    std::fs::write(&blob1_path, b"blob1").unwrap();
+    let out1 = Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "blob",
+            "put",
+            pile_path.to_str().unwrap(),
+            blob1_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let handle1 = String::from_utf8(out1).unwrap();
+    let handle1 = handle1.trim().to_string();
+
+    // Put blob2 containing the raw digest bytes of blob1 in its payload, so the
+    // locator can find a payload reference.
+    let digest_hex = handle1
+        .strip_prefix("blake3:")
+        .expect("handle prefix");
+    let digest_bytes = hex::decode(digest_hex).expect("decode digest hex");
+    let mut payload = b"prefix".to_vec();
+    payload.extend_from_slice(&digest_bytes);
+    payload.extend_from_slice(b"suffix");
+
+    let blob2_path = dir.path().join("blob2.bin");
+    std::fs::write(&blob2_path, payload).unwrap();
+    let out2 = Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "blob",
+            "put",
+            pile_path.to_str().unwrap(),
+            blob2_path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let handle2 = String::from_utf8(out2).unwrap();
+    let handle2 = handle2.trim().to_string();
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "diagnose",
+            pile_path.to_str().unwrap(),
+            "--locate-hash",
+            &handle1,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("blob header match"))
+        .stdout(predicate::str::contains(&format!(
+            "payload reference in {handle2}"
+        )))
+        .stdout(predicate::str::contains("Summary"));
+}
+
+#[test]
 fn pile_branch_create_outputs_id() {
     let dir = tempdir().unwrap();
     let pile_path = dir.path().join("create_branch.pile");

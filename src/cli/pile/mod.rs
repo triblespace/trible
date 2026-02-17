@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use std::fs;
+use std::fs::File;
 use std::path::PathBuf;
 
 // DEFAULT_MAX_PILE_SIZE no longer required for the updated Pile API
@@ -16,6 +17,135 @@ pub mod branch;
 mod merge;
 mod migrate;
 mod signing;
+
+fn padding_for_blob(blob_size: usize) -> usize {
+    // Match `triblespace_core::repo::pile::padding_for_blob` without depending on it.
+    (64 - ((64 + blob_size) % 64)) % 64
+}
+
+fn locate_hash_in_pile(pile_path: &std::path::Path, handle: &str) -> Result<()> {
+    use anyhow::Context as _;
+    use memchr::memmem::Finder;
+    use triblespace_core::blob::Bytes;
+    use triblespace_core::id::id_hex;
+    use triblespace_core::value::schemas::hash::Blake3;
+    use triblespace_core::value::schemas::hash::Hash;
+    use triblespace_core::value::Value;
+
+    let handle = handle.trim();
+    let normalized = if !handle.contains(':') && handle.len() == 64 {
+        format!("blake3:{handle}")
+    } else {
+        handle.to_owned()
+    };
+    let target: Value<Hash<Blake3>> = crate::cli::util::parse_blob_handle(&normalized)?;
+    let needle = target.raw;
+    let needle_str: String = target.from_value();
+
+    let file = File::open(pile_path)
+        .with_context(|| format!("open pile {}", pile_path.display()))?;
+    let mapped = unsafe { Bytes::map_file(&file)? };
+    let bytes: &[u8] = mapped.as_ref();
+
+    // Magic markers copied from `triblespace_core::repo::pile` so we can
+    // classify where the handle appears without mutating or indexing the pile.
+    let marker_blob = id_hex!("1E08B022FF2F47B6EBACF1D68EB35D96").raw();
+    let marker_branch = id_hex!("2BC991A7F5D5D2A3A468C53B0AA03504").raw();
+    let marker_branch_tombstone = id_hex!("E888CC787202D2AE4C654BFE9699C430").raw();
+
+    let finder = Finder::new(&needle);
+    let mut offset = 0usize;
+    let mut blob_header_matches = 0usize;
+    let mut branch_header_matches = 0usize;
+    let mut payload_matches = 0usize;
+    let mut parse_error: Option<String> = None;
+
+    while offset < bytes.len() {
+        if offset + 16 > bytes.len() {
+            break;
+        }
+        let magic = &bytes[offset..offset + 16];
+        if magic == marker_blob {
+            if offset + 64 > bytes.len() {
+                parse_error = Some(format!("truncated blob header at byte {offset}"));
+                break;
+            }
+            let length = u64::from_le_bytes(
+                bytes[offset + 24..offset + 32]
+                    .try_into()
+                    .expect("u64 slice"),
+            ) as usize;
+            let hash_bytes: [u8; 32] = bytes[offset + 32..offset + 64]
+                .try_into()
+                .expect("hash slice");
+            if hash_bytes == needle {
+                blob_header_matches += 1;
+                println!("blob header match at byte {offset}");
+            }
+
+            let payload_start = offset + 64;
+            let pad = padding_for_blob(length);
+            let record_end = payload_start
+                .checked_add(length)
+                .and_then(|v| v.checked_add(pad))
+                .ok_or_else(|| anyhow::anyhow!("blob record length overflow at byte {offset}"))?;
+            if record_end > bytes.len() {
+                parse_error = Some(format!(
+                    "truncated blob payload at byte {offset} (declared {length} bytes)"
+                ));
+                break;
+            }
+
+            let payload = &bytes[payload_start..payload_start + length];
+            if let Some(_) = finder.find(payload) {
+                let container_hash = Value::<Hash<Blake3>>::new(hash_bytes);
+                let container_str: String = container_hash.from_value();
+                for pos in finder.find_iter(payload) {
+                    payload_matches += 1;
+                    let absolute = payload_start + pos;
+                    println!("payload reference in {container_str} at byte {absolute}");
+                }
+            }
+
+            offset = record_end;
+        } else if magic == marker_branch {
+            if offset + 64 > bytes.len() {
+                parse_error = Some(format!("truncated branch header at byte {offset}"));
+                break;
+            }
+            let branch_id: [u8; 16] = bytes[offset + 16..offset + 32]
+                .try_into()
+                .expect("branch id slice");
+            let hash_bytes: [u8; 32] = bytes[offset + 32..offset + 64]
+                .try_into()
+                .expect("branch hash slice");
+            if hash_bytes == needle {
+                branch_header_matches += 1;
+                let branch_hex = hex::encode(branch_id).to_ascii_uppercase();
+                println!("branch head match at byte {offset} (branch_id {branch_hex})");
+            }
+            offset += 64;
+        } else if magic == marker_branch_tombstone {
+            if offset + 64 > bytes.len() {
+                parse_error = Some(format!("truncated branch tombstone at byte {offset}"));
+                break;
+            }
+            offset += 64;
+        } else {
+            parse_error = Some(format!("unknown magic marker at byte {offset}"));
+            break;
+        }
+    }
+
+    println!("\nSummary for {needle_str}:");
+    println!("  blob headers:   {blob_header_matches}");
+    println!("  branch headers: {branch_header_matches}");
+    println!("  payload refs:   {payload_matches}");
+    if let Some(err) = parse_error {
+        println!("  parse stopped:  {err}");
+    }
+    Ok(())
+}
 
 #[derive(Parser)]
 pub enum PileCommand {
@@ -57,6 +187,14 @@ pub enum PileCommand {
         /// Exit non-zero at the first detected issue
         #[arg(long)]
         fail_fast: bool,
+        /// Locate occurrences of the given blob handle in raw pile bytes.
+        ///
+        /// This is useful when the normal repository graph fails (e.g. a branch
+        /// points at a missing blob) and you want to distinguish:
+        /// - a missing blob record (0 header matches), vs
+        /// - a blob referenced inside other blob payloads (payload refs)
+        #[arg(long, value_name = "HANDLE")]
+        locate_hash: Option<String>,
     },
     /// Migrate legacy pile metadata to the current schemas.
     Migrate {
@@ -89,7 +227,14 @@ pub fn run(cmd: PileCommand) -> Result<()> {
             pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             Ok(())
         }
-        PileCommand::Diagnose { pile, fail_fast } => {
+        PileCommand::Diagnose {
+            pile,
+            fail_fast,
+            locate_hash,
+        } => {
+            if let Some(handle) = locate_hash {
+                return locate_hash_in_pile(&pile, &handle);
+            }
             use triblespace::prelude::blobschemas::{LongString, SimpleArchive};
 
             use triblespace_core::repo::pile::Pile;
