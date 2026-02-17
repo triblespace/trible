@@ -159,6 +159,18 @@ pub enum PileCommand {
         #[command(subcommand)]
         cmd: blob::Command,
     },
+    /// Locate occurrences of a blob handle in raw pile bytes.
+    ///
+    /// This is useful when the normal repository graph fails (e.g. a branch
+    /// points at a missing blob) and you want to distinguish:
+    /// - a missing blob record (0 header matches), vs
+    /// - a blob referenced inside other blob payloads (payload refs)
+    LocateHash {
+        /// Path to the pile file to inspect
+        pile: PathBuf,
+        /// Handle to locate (e.g. "blake3:HEX..." or bare 64 hex)
+        handle: String,
+    },
     /// Merge source branch heads into a target branch.
     Merge {
         /// Path to the pile file to modify
@@ -187,14 +199,6 @@ pub enum PileCommand {
         /// Exit non-zero at the first detected issue
         #[arg(long)]
         fail_fast: bool,
-        /// Locate occurrences of the given blob handle in raw pile bytes.
-        ///
-        /// This is useful when the normal repository graph fails (e.g. a branch
-        /// points at a missing blob) and you want to distinguish:
-        /// - a missing blob record (0 header matches), vs
-        /// - a blob referenced inside other blob payloads (payload refs)
-        #[arg(long, value_name = "HANDLE")]
-        locate_hash: Option<String>,
     },
     /// Migrate legacy pile metadata to the current schemas.
     Migrate {
@@ -209,6 +213,7 @@ pub fn run(cmd: PileCommand) -> Result<()> {
     match cmd {
         PileCommand::Branch { cmd } => branch::run(cmd),
         PileCommand::Blob { cmd } => blob::run(cmd),
+        PileCommand::LocateHash { pile, handle } => locate_hash_in_pile(&pile, &handle),
         PileCommand::Merge {
             pile,
             target,
@@ -227,14 +232,7 @@ pub fn run(cmd: PileCommand) -> Result<()> {
             pile.flush().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             Ok(())
         }
-        PileCommand::Diagnose {
-            pile,
-            fail_fast,
-            locate_hash,
-        } => {
-            if let Some(handle) = locate_hash {
-                return locate_hash_in_pile(&pile, &handle);
-            }
+        PileCommand::Diagnose { pile, fail_fast } => {
             use triblespace::prelude::blobschemas::{LongString, SimpleArchive};
 
             use triblespace_core::repo::pile::Pile;

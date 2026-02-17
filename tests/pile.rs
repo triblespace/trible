@@ -406,9 +406,8 @@ fn diagnose_locate_hash_reports_header_and_payload_refs() {
         .unwrap()
         .args([
             "pile",
-            "diagnose",
+            "locate-hash",
             pile_path.to_str().unwrap(),
-            "--locate-hash",
             &handle1,
         ])
         .assert()
