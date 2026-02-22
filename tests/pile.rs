@@ -75,6 +75,67 @@ fn delete_branch_removes_branch_id_from_list() {
 }
 
 #[test]
+fn branch_stats_reports_fast_and_full_counts() {
+    use triblespace::prelude::blobschemas::LongString;
+    use triblespace::prelude::*;
+
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("stats_test.pile");
+
+    let branch_id = {
+        let pile: Pile<Blake3> = Pile::open(&path).unwrap();
+        let mut repo = Repository::new(pile, random_signing_key());
+        let branch_id = repo.create_branch("main", None).expect("create branch");
+        let mut ws = repo.pull(*branch_id).expect("pull");
+
+        let entity_id = ufoid();
+        let mut content = TribleSet::new();
+        let label = ws.put::<LongString, _>("stats-test".to_string());
+        content += entity! { &entity_id @ triblespace_core::metadata::name: label };
+        ws.commit(content, None, Some("seed"));
+
+        let push_res = repo.try_push(&mut ws).expect("push");
+        assert!(push_res.is_none(), "unexpected push conflict");
+
+        let pile = repo.into_storage();
+        pile.close().unwrap();
+        *branch_id
+    };
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "branch",
+            "stats",
+            path.to_str().unwrap(),
+            &format!("{branch_id:X}"),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Commits: 1"))
+        .stdout(predicate::str::contains("Content blobs (accum): 1"))
+        .stdout(predicate::str::contains("Content bytes (accum): 64"))
+        .stdout(predicate::str::contains("Triples (accum): 1"));
+
+    Command::cargo_bin("trible")
+        .unwrap()
+        .args([
+            "pile",
+            "branch",
+            "stats",
+            path.to_str().unwrap(),
+            &format!("{branch_id:X}"),
+            "--full",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Triples (unique): 1"))
+        .stdout(predicate::str::contains("Entities: 1"))
+        .stdout(predicate::str::contains("Attributes: 1"));
+}
+
+#[test]
 fn create_initializes_empty_pile() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("create_test.pile");
@@ -378,9 +439,7 @@ fn diagnose_locate_hash_reports_header_and_payload_refs() {
 
     // Put blob2 containing the raw digest bytes of blob1 in its payload, so the
     // locator can find a payload reference.
-    let digest_hex = handle1
-        .strip_prefix("blake3:")
-        .expect("handle prefix");
+    let digest_hex = handle1.strip_prefix("blake3:").expect("handle prefix");
     let digest_bytes = hex::decode(digest_hex).expect("decode digest hex");
     let mut payload = b"prefix".to_vec();
     payload.extend_from_slice(&digest_bytes);

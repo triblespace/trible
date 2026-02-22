@@ -78,6 +78,8 @@ trible pile migrate <PILE> run branch-metadata-name
 - `pile branch list <PILE>` — list branch ids, heads, and names.
 - `pile branch create <PILE> <NAME>` — create a new branch.
 - `pile branch delete <PILE> <BRANCH_ID>` — delete a branch (writes a tombstone record).
+- `pile branch stats <PILE> <BRANCH_ID>` — fast branch stats (commit count + accumulated content blob bytes + accumulated triple count via `bytes / 64`).
+- `pile branch stats <PILE> <BRANCH_ID> --full` — additionally materialize content to compute unique triples/entities/attributes (slower).
 - `pile branch consolidate <PILE> <BRANCH_ID...>` — consolidate multiple branches into a single new branch. The command creates a single merge commit whose parents are the selected branch heads and prints the new branch id.
 - `pile merge <PILE> <TARGET_ID> <SOURCE_ID...>` — merge source branch heads into a target branch by creating merge-only commits.
 

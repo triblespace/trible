@@ -138,12 +138,15 @@ pub enum Command {
         #[arg(long)]
         to_pile: PathBuf,
     },
-    /// Show statistics for a branch: commits, triples, entities, attributes.
+    /// Show statistics for a branch.
     Stats {
         /// Path to the pile file to inspect
         pile: PathBuf,
         /// Branch identifier to inspect (hex encoded)
         branch: String,
+        /// Also compute unique triples/entities/attributes by materializing commit content.
+        #[arg(long, default_value_t = false)]
+        full: bool,
     },
     /// Import reachable blobs from a source branch into a target pile and
     /// attach them to the target branch via a single merge commit.
@@ -733,92 +736,92 @@ pub fn run(cmd: Command) -> Result<()> {
                 let mut file = std::fs::File::open(&pile)?;
                 let file_len = file.metadata()?.len();
 
-            #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-            enum Kind {
-                Set,
-                Delete,
-            }
+                #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+                enum Kind {
+                    Set,
+                    Delete,
+                }
 
-            #[derive(Clone, Debug)]
-            struct State {
-                offset: u64,
-                kind: Kind,
-                // Most recent metadata handle (only when kind == Set).
-                meta: Option<Value<Handle<Blake3, SimpleArchive>>>,
-                // Most recent Set metadata handle (kept even after tombstone).
-                last_set: Option<Value<Handle<Blake3, SimpleArchive>>>,
-            }
+                #[derive(Clone, Debug)]
+                struct State {
+                    offset: u64,
+                    kind: Kind,
+                    // Most recent metadata handle (only when kind == Set).
+                    meta: Option<Value<Handle<Blake3, SimpleArchive>>>,
+                    // Most recent Set metadata handle (kept even after tombstone).
+                    last_set: Option<Value<Handle<Blake3, SimpleArchive>>>,
+                }
 
-            let mut states: HashMap<Id, State> = HashMap::new();
+                let mut states: HashMap<Id, State> = HashMap::new();
 
-            let mut offset: u64 = 0;
-            let mut buf = [0u8; RECORD_LEN as usize];
-            while offset + RECORD_LEN <= file_len {
-                file.seek(SeekFrom::Start(offset))?;
-                if file.read_exact(&mut buf).is_err() {
+                let mut offset: u64 = 0;
+                let mut buf = [0u8; RECORD_LEN as usize];
+                while offset + RECORD_LEN <= file_len {
+                    file.seek(SeekFrom::Start(offset))?;
+                    if file.read_exact(&mut buf).is_err() {
+                        break;
+                    }
+
+                    let magic: [u8; 16] = buf[0..16].try_into().unwrap();
+                    if magic == MAGIC_MARKER_BLOB.raw() {
+                        let len = u64::from_ne_bytes(buf[24..32].try_into().unwrap());
+                        let pad = blob_padding(len);
+                        offset = offset
+                            .checked_add(RECORD_LEN)
+                            .and_then(|o| o.checked_add(len))
+                            .and_then(|o| o.checked_add(pad))
+                            .ok_or_else(|| anyhow::anyhow!("pile too large"))?;
+                        continue;
+                    }
+
+                    if magic == MAGIC_MARKER_BRANCH.raw() {
+                        let raw_id: [u8; 16] = buf[16..32].try_into().unwrap();
+                        let Some(id) = Id::new(raw_id) else {
+                            break;
+                        };
+                        let raw_handle: [u8; 32] = buf[32..64].try_into().unwrap();
+                        let meta: Value<Handle<Blake3, SimpleArchive>> = Value::new(raw_handle);
+
+                        let entry = states.entry(id).or_insert(State {
+                            offset,
+                            kind: Kind::Set,
+                            meta: Some(meta),
+                            last_set: Some(meta),
+                        });
+                        entry.offset = offset;
+                        entry.kind = Kind::Set;
+                        entry.meta = Some(meta);
+                        entry.last_set = Some(meta);
+
+                        offset += RECORD_LEN;
+                        continue;
+                    }
+
+                    if magic == MAGIC_MARKER_BRANCH_TOMBSTONE.raw() {
+                        let raw_id: [u8; 16] = buf[16..32].try_into().unwrap();
+                        let Some(id) = Id::new(raw_id) else {
+                            break;
+                        };
+
+                        let entry = states.entry(id).or_insert(State {
+                            offset,
+                            kind: Kind::Delete,
+                            meta: None,
+                            last_set: None,
+                        });
+                        entry.offset = offset;
+                        entry.kind = Kind::Delete;
+                        entry.meta = None;
+
+                        offset += RECORD_LEN;
+                        continue;
+                    }
+
                     break;
                 }
 
-                let magic: [u8; 16] = buf[0..16].try_into().unwrap();
-                if magic == MAGIC_MARKER_BLOB.raw() {
-                    let len = u64::from_ne_bytes(buf[24..32].try_into().unwrap());
-                    let pad = blob_padding(len);
-                    offset = offset
-                        .checked_add(RECORD_LEN)
-                        .and_then(|o| o.checked_add(len))
-                        .and_then(|o| o.checked_add(pad))
-                        .ok_or_else(|| anyhow::anyhow!("pile too large"))?;
-                    continue;
-                }
-
-                if magic == MAGIC_MARKER_BRANCH.raw() {
-                    let raw_id: [u8; 16] = buf[16..32].try_into().unwrap();
-                    let Some(id) = Id::new(raw_id) else {
-                        break;
-                    };
-                    let raw_handle: [u8; 32] = buf[32..64].try_into().unwrap();
-                    let meta: Value<Handle<Blake3, SimpleArchive>> = Value::new(raw_handle);
-
-                    let entry = states.entry(id).or_insert(State {
-                        offset,
-                        kind: Kind::Set,
-                        meta: Some(meta),
-                        last_set: Some(meta),
-                    });
-                    entry.offset = offset;
-                    entry.kind = Kind::Set;
-                    entry.meta = Some(meta);
-                    entry.last_set = Some(meta);
-
-                    offset += RECORD_LEN;
-                    continue;
-                }
-
-                if magic == MAGIC_MARKER_BRANCH_TOMBSTONE.raw() {
-                    let raw_id: [u8; 16] = buf[16..32].try_into().unwrap();
-                    let Some(id) = Id::new(raw_id) else {
-                        break;
-                    };
-
-                    let entry = states.entry(id).or_insert(State {
-                        offset,
-                        kind: Kind::Delete,
-                        meta: None,
-                        last_set: None,
-                    });
-                    entry.offset = offset;
-                    entry.kind = Kind::Delete;
-                    entry.meta = None;
-
-                    offset += RECORD_LEN;
-                    continue;
-                }
-
-                break;
-            }
-
-            let mut rows: Vec<(Id, State)> = states.into_iter().collect();
-            rows.sort_by(|(_a_id, a), (_b_id, b)| b.offset.cmp(&a.offset));
+                let mut rows: Vec<(Id, State)> = states.into_iter().collect();
+                rows.sort_by(|(_a_id, a), (_b_id, b)| b.offset.cmp(&a.offset));
 
                 let mut printed: usize = 0;
                 for (id, state) in rows {
@@ -826,60 +829,61 @@ pub fn run(cmd: Command) -> Result<()> {
                         continue;
                     }
 
-                let meta_handle: Option<Value<Handle<Blake3, SimpleArchive>>> = match state.kind {
-                    Kind::Set => state.meta,
-                    Kind::Delete => state.last_set,
-                };
+                    let meta_handle: Option<Value<Handle<Blake3, SimpleArchive>>> = match state.kind
+                    {
+                        Kind::Set => state.meta,
+                        Kind::Delete => state.last_set,
+                    };
 
-                let mut meta_present: bool = false;
-                let mut head: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
-                let mut head_present: Option<bool> = None;
-                let mut name: Option<String> = None;
+                    let mut meta_present: bool = false;
+                    let mut head: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
+                    let mut head_present: Option<bool> = None;
+                    let mut name: Option<String> = None;
 
-                let meta = match meta_handle {
-                    None => "-".to_string(),
-                    Some(h) => {
-                        meta_present = reader.metadata(h)?.is_some();
-                        if meta_present {
-                            if let Ok(meta_set) = reader.get::<TribleSet, SimpleArchive>(h) {
-                                name = load_branch_name(&reader, &meta_set).ok().flatten();
-                                head = extract_repo_head(&meta_set);
-                                if let Some(ch) = head {
-                                    head_present = Some(reader.metadata(ch)?.is_some());
+                    let meta = match meta_handle {
+                        None => "-".to_string(),
+                        Some(h) => {
+                            meta_present = reader.metadata(h)?.is_some();
+                            if meta_present {
+                                if let Ok(meta_set) = reader.get::<TribleSet, SimpleArchive>(h) {
+                                    name = load_branch_name(&reader, &meta_set).ok().flatten();
+                                    head = extract_repo_head(&meta_set);
+                                    if let Some(ch) = head {
+                                        head_present = Some(reader.metadata(ch)?.is_some());
+                                    }
                                 }
                             }
+                            format!("blake3:{}", hex::encode(h.raw))
                         }
-                        format!("blake3:{}", hex::encode(h.raw))
-                    }
-                };
+                    };
 
-                let kind = match state.kind {
-                    Kind::Set => "set",
-                    Kind::Delete => "delete",
-                };
+                    let kind = match state.kind {
+                        Kind::Set => "set",
+                        Kind::Delete => "delete",
+                    };
 
-                let meta_state = if meta == "-" {
-                    "-"
-                } else if meta_present {
-                    "present"
-                } else {
-                    "missing"
-                };
+                    let meta_state = if meta == "-" {
+                        "-"
+                    } else if meta_present {
+                        "present"
+                    } else {
+                        "missing"
+                    };
 
-                let head_state = match head_present {
-                    None => "-",
-                    Some(true) => "present",
-                    Some(false) => "missing",
-                };
+                    let head_state = match head_present {
+                        None => "-",
+                        Some(true) => "present",
+                        Some(false) => "missing",
+                    };
 
-                let head = match head {
-                    None => "-".to_string(),
-                    Some(h) => format!("blake3:{}", hex::encode(h.raw)),
-                };
+                    let head = match head {
+                        None => "-".to_string(),
+                        Some(h) => format!("blake3:{}", hex::encode(h.raw)),
+                    };
 
-                let name = name.unwrap_or_else(|| "-".to_string());
+                    let name = name.unwrap_or_else(|| "-".to_string());
 
-                println!("{id:X}\t{kind}\t{meta}\t{meta_state}\t{head}\t{head_state}\t{name}",);
+                    println!("{id:X}\t{kind}\t{meta}\t{meta_state}\t{head}\t{head_state}\t{name}",);
 
                     printed += 1;
                     if printed >= limit {
@@ -995,7 +999,7 @@ pub fn run(cmd: Command) -> Result<()> {
                 }
             }?;
         }
-        Command::Stats { pile, branch } => {
+        Command::Stats { pile, branch, full } => {
             use std::collections::{BTreeSet, HashSet};
             use triblespace::prelude::blobschemas::SimpleArchive;
             use triblespace::prelude::valueschemas::Handle;
@@ -1048,6 +1052,9 @@ pub fn run(cmd: Command) -> Result<()> {
                 let mut stack: Vec<Value<Handle<Blake3, SimpleArchive>>> = vec![head];
                 let mut commit_count: usize = 0;
                 let mut total_triples_accum: usize = 0;
+                let mut content_blob_count: usize = 0;
+                let mut content_bytes_total: u64 = 0;
+                let mut content_misaligned_count: usize = 0;
                 let mut unioned = TribleSet::new();
 
                 while let Some(h) = stack.pop() {
@@ -1079,15 +1086,27 @@ pub fn run(cmd: Command) -> Result<()> {
                     }
 
                     for c in content_handles {
-                        if reader.metadata(c)?.is_none() {
+                        let Some(content_meta) = reader.metadata(c)? else {
                             continue;
-                        }
-                        let content: TribleSet = match reader.get::<TribleSet, SimpleArchive>(c) {
-                            Ok(s) => s,
-                            Err(_) => continue,
                         };
-                        total_triples_accum += content.len();
-                        unioned += content;
+                        content_blob_count = content_blob_count.saturating_add(1);
+                        content_bytes_total =
+                            content_bytes_total.saturating_add(content_meta.length);
+                        let triples_from_length =
+                            (content_meta.length / 64).try_into().unwrap_or(usize::MAX);
+                        total_triples_accum =
+                            total_triples_accum.saturating_add(triples_from_length);
+                        if content_meta.length % 64 != 0 {
+                            content_misaligned_count = content_misaligned_count.saturating_add(1);
+                        }
+                        if full {
+                            let content: TribleSet = match reader.get::<TribleSet, SimpleArchive>(c)
+                            {
+                                Ok(s) => s,
+                                Err(_) => continue,
+                            };
+                            unioned += content;
+                        }
                     }
 
                     for p in parents {
@@ -1095,21 +1114,27 @@ pub fn run(cmd: Command) -> Result<()> {
                     }
                 }
 
-                // Count unique triples, entities, attributes
-                let unique_triples = unioned.len();
-                let mut entities: HashSet<Id> = HashSet::new();
-                let mut attributes: HashSet<Id> = HashSet::new();
-                for t in unioned.iter() {
-                    entities.insert(*t.e());
-                    attributes.insert(*t.a());
-                }
-
                 println!("Branch: {branch_id:X}");
                 println!("Commits: {commit_count}");
-                println!("Triples (unique): {unique_triples}");
+                println!("Content blobs (accum): {content_blob_count}");
+                println!("Content bytes (accum): {content_bytes_total}");
                 println!("Triples (accum): {total_triples_accum}");
-                println!("Entities: {}", entities.len());
-                println!("Attributes: {}", attributes.len());
+                if content_misaligned_count > 0 {
+                    println!("Warning: {content_misaligned_count} content blob(s) had non-64-byte-aligned length.");
+                }
+                if full {
+                    // Count unique triples, entities, and attributes only when explicitly requested.
+                    let unique_triples = unioned.len();
+                    let mut entities: HashSet<Id> = HashSet::new();
+                    let mut attributes: HashSet<Id> = HashSet::new();
+                    for t in unioned.iter() {
+                        entities.insert(*t.e());
+                        attributes.insert(*t.a());
+                    }
+                    println!("Triples (unique): {unique_triples}");
+                    println!("Entities: {}", entities.len());
+                    println!("Attributes: {}", attributes.len());
+                }
 
                 Ok(())
             })();

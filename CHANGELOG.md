@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - `pile diagnose locate-hash` to scan raw pile bytes and report where a blob handle appears (header vs payload references).
 ### Changed
 - `pile diagnose` is now a subcommand group (`check`, `locate-hash`) instead of a single command.
+- `pile branch stats` now defaults to a fast path that reports accumulated content bytes and accumulated triple count from blob metadata (`length / 64`) without materializing commit payload tribles.
+- `pile branch stats --full` retains the previous deep scan behavior for unique triples/entities/attributes.
 
 ## [0.12.0] - 2026-02-09
 ### Changed
