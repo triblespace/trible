@@ -181,6 +181,9 @@ pub enum Command {
         /// Dry run: show what would be done without making changes
         #[arg(long)]
         dry_run: bool,
+        /// Delete (tombstone) the source branches after consolidation
+        #[arg(long)]
+        delete_sources: bool,
         /// Optional signing key path. The file should contain a 64-char hex seed.
         #[arg(long)]
         signing_key: Option<PathBuf>,
@@ -1250,6 +1253,7 @@ pub fn run(cmd: Command) -> Result<()> {
             branches,
             out_name,
             dry_run,
+            delete_sources,
             signing_key,
         } => {
             use std::collections::HashSet;
@@ -1362,6 +1366,21 @@ pub fn run(cmd: Command) -> Result<()> {
                     .create_branch_with_key(&out, Some(commit_handle), key.clone())
                     .map_err(|e| anyhow::anyhow!("failed to create consolidated branch: {e:?}"))?;
                 println!("created consolidated branch '{out}' with id {new_id:X}");
+
+                if delete_sources {
+                    for (bid, _) in &candidates {
+                        if let Some(old) = repo.storage_mut().head(*bid)? {
+                            match repo.storage_mut().update(*bid, Some(old), None)? {
+                                triblespace_core::repo::PushResult::Success() => {
+                                    println!("deleted source branch {bid:X}");
+                                }
+                                triblespace_core::repo::PushResult::Conflict(_) => {
+                                    eprintln!("warning: branch {bid:X} advanced concurrently; skipping delete");
+                                }
+                            }
+                        }
+                    }
+                }
                 Ok(())
             })();
 
