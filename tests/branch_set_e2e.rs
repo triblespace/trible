@@ -92,7 +92,7 @@ fn branch_set_creates_and_updates_with_cas() {
 }
 
 #[test]
-fn branch_journal_lists_deleted_branches() {
+fn branch_list_all_deleted_lists_deleted_branches() {
     let dir = tempdir().unwrap();
     let pile_path = dir.path().join("test-branch-journal.pile");
 
@@ -120,28 +120,23 @@ fn branch_journal_lists_deleted_branches() {
         .args([
             "pile",
             "branch",
-            "journal",
+            "list",
             pile_path.to_str().unwrap(),
+            "--all",
             "--deleted",
-            "--limit",
-            "50",
         ])
         .output()
         .expect("run trible");
 
     assert!(
         out.status.success(),
-        "journal failed: {}",
+        "list --all --deleted failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains(&format!("{branch_id:X}\tdelete\t")),
-        "expected branch id and delete state in journal output, got:\n{stdout}"
-    );
-    assert!(
-        stdout.contains(&format!("blake3:{}", hex::encode(h1.raw))),
-        "expected last-set meta handle in journal output, got:\n{stdout}"
+        "expected branch id and delete state in list --all --deleted output, got:\n{stdout}"
     );
 }

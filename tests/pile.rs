@@ -7,6 +7,7 @@ use triblespace::prelude::BlobStoreList;
 use triblespace::prelude::BranchStore;
 use triblespace_core::repo::pile::Pile;
 use triblespace_core::repo::Repository;
+use triblespace_core::trible::TribleSet;
 use triblespace_core::value::schemas::hash::Blake3;
 
 fn random_signing_key() -> SigningKey {
@@ -22,7 +23,7 @@ fn list_branches_outputs_branch_id() {
 
     {
         let pile: Pile<Blake3> = Pile::open(&path).unwrap();
-        let mut repo = Repository::new(pile, random_signing_key());
+        let mut repo = Repository::new(pile, random_signing_key(), TribleSet::new()).unwrap();
         repo.create_branch("main", None).expect("create branch");
         repo.into_storage().close().unwrap();
     }
@@ -42,7 +43,7 @@ fn delete_branch_removes_branch_id_from_list() {
 
     let branch_id = {
         let pile: Pile<Blake3> = Pile::open(&path).unwrap();
-        let mut repo = Repository::new(pile, random_signing_key());
+        let mut repo = Repository::new(pile, random_signing_key(), TribleSet::new()).unwrap();
         let branch_id = repo.create_branch("main", None).expect("create branch");
         let pile = repo.into_storage();
         pile.close().unwrap();
@@ -84,7 +85,7 @@ fn branch_stats_reports_fast_and_full_counts() {
 
     let branch_id = {
         let pile: Pile<Blake3> = Pile::open(&path).unwrap();
-        let mut repo = Repository::new(pile, random_signing_key());
+        let mut repo = Repository::new(pile, random_signing_key(), TribleSet::new()).unwrap();
         let branch_id = repo.create_branch("main", None).expect("create branch");
         let mut ws = repo.pull(*branch_id).expect("pull");
 
@@ -92,7 +93,7 @@ fn branch_stats_reports_fast_and_full_counts() {
         let mut content = TribleSet::new();
         let label = ws.put::<LongString, _>("stats-test".to_string());
         content += entity! { &entity_id @ triblespace_core::metadata::name: label };
-        ws.commit(content, None, Some("seed"));
+        ws.commit(content, "seed");
 
         let push_res = repo.try_push(&mut ws).expect("push");
         assert!(push_res.is_none(), "unexpected push conflict");
