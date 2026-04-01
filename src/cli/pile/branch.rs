@@ -207,6 +207,19 @@ pub enum Command {
         /// Commit handle (blake3:... or raw 64-char hex)
         commit: String,
     },
+    /// Rename a branch (creates a new branch with the new name pointing
+    /// to the same commit, then deletes the old one).
+    Rename {
+        /// Path to the pile file to modify
+        pile: PathBuf,
+        /// Branch to rename (name or hex id)
+        branch: String,
+        /// New name for the branch
+        new_name: String,
+        /// Optional signing key path. The file should contain a 64-char hex seed.
+        #[arg(long)]
+        signing_key: Option<PathBuf>,
+    },
 }
 
 pub fn run(cmd: Command) -> Result<()> {
@@ -432,7 +445,7 @@ pub fn run(cmd: Command) -> Result<()> {
                     println!("Name:      {nstr}");
                 }
                 println!(
-                    "Meta:      blake3:{meta_hex} [{}]{}",
+                    "Meta:      {meta_hex} [{}]{}",
                     if meta_present { "present" } else { "missing" },
                     head_err
                         .as_deref()
@@ -444,7 +457,7 @@ pub fn run(cmd: Command) -> Result<()> {
                     let head_hex: String = head_hash.from_value();
                     let present = reader.metadata(h)?.is_some();
                     println!(
-                        "Head:      blake3:{head_hex} [{}]",
+                        "Head:      {head_hex} [{}]",
                         if present { "present" } else { "missing" }
                     );
                 }
@@ -1177,7 +1190,7 @@ pub fn run(cmd: Command) -> Result<()> {
                         if let Some(h) = head {
                             let hh: Value<Hash<Blake3>> = Handle::to_hash(*h);
                             let hex: String = hh.from_value();
-                            println!("- {id_hex} -> commit blake3:{hex}");
+                            println!("- {id_hex} -> commit {hex}");
                         } else {
                             println!("- {id_hex} -> <no head>");
                         }
@@ -1292,7 +1305,7 @@ pub fn run(cmd: Command) -> Result<()> {
                         Err(_) => {
                             let hash: Value<Hash<Blake3>> = Handle::to_hash(current);
                             let hex: String = hash.from_value();
-                            println!("blake3:{hex}  <missing blob>");
+                            println!("{hex}  <missing blob>");
                             printed += 1;
                             continue;
                         }
@@ -1330,7 +1343,7 @@ pub fn run(cmd: Command) -> Result<()> {
                     };
 
                     println!(
-                        "blake3:{hex}  parents={np}  tribles={tc}  {msg}",
+                        "{hex}  parents={np}  tribles={tc}  {msg}",
                         np = info.parents.len(),
                         tc = content_count,
                     );
@@ -1365,7 +1378,7 @@ pub fn run(cmd: Command) -> Result<()> {
                 let info = read_commit_fields(&commit_set);
                 let hash: Value<Hash<Blake3>> = Handle::to_hash(commit_handle);
                 let hex: String = hash.from_value();
-                println!("Commit: blake3:{hex}");
+                println!("Commit: {hex}");
 
                 // Message
                 if let Some(sm) = &info.short_message {
@@ -1393,7 +1406,7 @@ pub fn run(cmd: Command) -> Result<()> {
                         let phex: String = ph.from_value();
                         let present = reader.metadata(*p)?.is_some();
                         println!(
-                            "  blake3:{phex} [{}]",
+                            "  {phex} [{}]",
                             if present { "present" } else { "missing" }
                         );
                     }
@@ -1404,7 +1417,7 @@ pub fn run(cmd: Command) -> Result<()> {
                     let ch_hash: Value<Hash<Blake3>> = Handle::to_hash(ch);
                     let ch_hex: String = ch_hash.from_value();
                     let present = reader.metadata(ch)?.is_some();
-                    print!("Content: blake3:{ch_hex} [{}]", if present { "present" } else { "missing" });
+                    print!("Content: {ch_hex} [{}]", if present { "present" } else { "missing" });
                     if present {
                         if let Ok(ts) = reader.get::<TribleSet, _>(ch) {
                             use std::collections::HashSet;
@@ -1433,7 +1446,7 @@ pub fn run(cmd: Command) -> Result<()> {
                     let mh_hex: String = mh_hash.from_value();
                     let present = reader.metadata(mh)?.is_some();
                     println!(
-                        "Metadata: blake3:{mh_hex} [{}]",
+                        "Metadata: {mh_hex} [{}]",
                         if present { "present" } else { "missing" }
                     );
                 } else {
@@ -1608,6 +1621,86 @@ pub fn run(cmd: Command) -> Result<()> {
             let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
             res.and(close_res)?;
         }
+        Command::Rename {
+            pile,
+            branch,
+            new_name,
+            signing_key,
+        } => {
+            use triblespace_core::repo::pile::Pile;
+            use triblespace_core::repo::branch as branch_mod;
+            use triblespace_core::query::find;
+            use triblespace_core::macros::pattern;
+
+            let branch_id = parse_branch_id_hex(&branch)?;
+            let key = load_signing_key(&signing_key)?;
+
+            let mut pile: Pile<Blake3> = Pile::open(&pile)?;
+            let res = (|| -> Result<(), anyhow::Error> {
+                pile.refresh()?;
+
+                let mut current_meta_handle = pile
+                    .head(branch_id)?
+                    .ok_or_else(|| anyhow::anyhow!("branch {branch} not found"))?;
+
+                loop {
+                    // Load current branch metadata.
+                    let reader = pile.reader()
+                        .map_err(|e| anyhow::anyhow!("reader: {e:?}"))?;
+                    let meta: TribleSet = reader.get(current_meta_handle)
+                        .map_err(|e| anyhow::anyhow!("read branch meta: {e:?}"))?;
+
+                    // Extract current commit head from metadata.
+                    let head_handle: Option<Value<Handle<Blake3, SimpleArchive>>> =
+                        find!((h: Value<_>), pattern!(&meta, [{ triblespace_core::repo::head: ?h }]))
+                            .next()
+                            .map(|(h,)| h);
+
+                    // Build the commit head blob for re-signing (branch_metadata needs it).
+                    let commit_blob = if let Some(h) = head_handle {
+                        let commit_set: TribleSet = reader.get(h)
+                            .map_err(|e| anyhow::anyhow!("read commit: {e:?}"))?;
+                        Some(commit_set.to_blob())
+                    } else {
+                        None
+                    };
+
+                    // Store the new name as a LongString blob.
+                    let name_handle: BranchNameHandle = pile
+                        .put(new_name.clone().to_blob())
+                        .map_err(|e| anyhow::anyhow!("put name blob: {e:?}"))?;
+
+                    // Build new branch metadata with the new name.
+                    let new_meta = branch_mod::branch_metadata(
+                        &key,
+                        branch_id,
+                        name_handle,
+                        commit_blob,
+                    );
+
+                    let new_meta_handle = pile
+                        .put(new_meta)
+                        .map_err(|e| anyhow::anyhow!("put branch meta: {e:?}"))?;
+
+                    // CAS: swap old metadata for new.
+                    match pile.update(branch_id, Some(current_meta_handle), Some(new_meta_handle))? {
+                        triblespace_core::repo::PushResult::Success() => {
+                            println!("renamed {branch_id:X} → \"{new_name}\"");
+                            return Ok(());
+                        }
+                        triblespace_core::repo::PushResult::Conflict(conflict) => {
+                            let conflict = conflict
+                                .ok_or_else(|| anyhow::anyhow!("branch deleted concurrently"))?;
+                            eprintln!("CAS conflict, retrying...");
+                            current_meta_handle = conflict;
+                            // loop back and retry with the new handle
+                        }
+                    }
+                }
+            })();
+            let close_res = pile.close().map_err(|e| anyhow::anyhow!("{e:?}"));
+            res.and(close_res)?;
+        }
     }
     Ok(())
 }
@@ -1778,7 +1871,7 @@ fn read_commit_fields(commit: &TribleSet) -> CommitInfo {
             info.message = Some(*t.v::<Handle<Blake3, LongString>>());
         } else if a == short_message_attr {
             let v: Value<ShortString> = *t.v();
-            info.short_message = Some(v.from_value());
+            info.short_message = v.try_from_value().ok();
         } else if a == timestamp_attr {
             info.timestamp = Some(*t.v::<NsTAIInterval>());
         } else if a == signed_by_attr {
@@ -1903,7 +1996,7 @@ fn consolidate_groups(
             if let Some(h) = head {
                 let hh: Value<Hash<Blake3>> = Handle::to_hash(*h);
                 let hex: String = hh.from_value();
-                println!("  - {bid:X} [{status}] head=blake3:{}", &hex[..16]);
+                println!("  - {bid:X} [{status}] head={}", &hex[..23]);
             } else {
                 println!("  - {bid:X} [{status}] <no head>");
             }
@@ -1929,7 +2022,7 @@ fn consolidate_groups(
                             subsumed.insert(unique_heads[i].raw);
                             let hh: Value<Hash<Blake3>> = Handle::to_hash(unique_heads[i]);
                             let hex: String = hh.from_value();
-                            println!("  (blake3:{}... subsumed)", &hex[..16]);
+                            println!("  ({}... subsumed)", &hex[..23]);
                             break;
                         }
                         Ok(false) => {}
