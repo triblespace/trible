@@ -1342,8 +1342,21 @@ pub fn run(cmd: Command) -> Result<()> {
                         "0".to_string()
                     };
 
+                    let ts_str = if let Some(ts_val) = info.timestamp {
+                        use triblespace_core::value::schemas::time::Lower;
+                        let lower: Lower = ts_val.try_from_value().unwrap_or(Lower(0));
+                        let epoch = hifitime::Epoch::from_tai_duration(
+                            hifitime::Duration::from_total_nanoseconds(lower.0));
+                        hifitime::efmt::Formatter::new(
+                            epoch,
+                            hifitime::efmt::consts::ISO8601,
+                        ).to_string()
+                    } else {
+                        "?".to_string()
+                    };
+
                     println!(
-                        "{hex}  parents={np}  tribles={tc}  {msg}",
+                        "{hex}  {ts_str}  parents={np}  tribles={tc}  {msg}",
                         np = info.parents.len(),
                         tc = content_count,
                     );
@@ -1846,6 +1859,7 @@ fn read_commit_fields(commit: &TribleSet) -> CommitInfo {
     let message_attr = repo::message.id();
     let short_message_attr = repo::short_message.id();
     let timestamp_attr = repo::timestamp.id();
+    let created_at_attr = triblespace_core::metadata::created_at.id();
     let signed_by_attr = repo::signed_by.id();
 
     let mut info = CommitInfo {
@@ -1872,7 +1886,7 @@ fn read_commit_fields(commit: &TribleSet) -> CommitInfo {
         } else if a == short_message_attr {
             let v: Value<ShortString> = *t.v();
             info.short_message = v.try_from_value().ok();
-        } else if a == timestamp_attr {
+        } else if a == timestamp_attr || a == created_at_attr {
             info.timestamp = Some(*t.v::<NsTAIInterval>());
         } else if a == signed_by_attr {
             let v: Value<ed::ED25519PublicKey> = *t.v();
