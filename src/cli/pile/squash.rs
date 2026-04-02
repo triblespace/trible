@@ -17,7 +17,7 @@ use super::signing::load_signing_key;
 const CHUNK_TRIBLES: usize = 1 << 24;
 const TRIBLE_LEN: usize = 64;
 
-pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include: Vec<String>) -> Result<()> {
+pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include: Vec<String>, exclude: Vec<String>) -> Result<()> {
     let key = load_signing_key(&signing_key)?;
 
     // Open source pile.
@@ -70,17 +70,19 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include
         })()
         .unwrap_or_else(|| format!("{bid:x}"));
 
-        // Filter by --include if specified (matches name or hex ID).
-        if !include.is_empty() {
-            let bid_hex = format!("{bid:X}");
-            let bid_hex_lower = format!("{bid:x}");
-            let matched = include.iter().any(|i| {
-                i == &name || i == &bid_hex || i == &bid_hex_lower
-            });
-            if !matched {
-                println!("skip {name}: not in --include list");
-                continue;
-            }
+        // Filter by --include / --exclude (matches name or hex ID).
+        let bid_hex = format!("{bid:X}");
+        let bid_hex_lower = format!("{bid:x}");
+        let matches = |list: &[String]| {
+            list.iter().any(|i| i == &name || i == &bid_hex || i == &bid_hex_lower)
+        };
+        if !include.is_empty() && !matches(&include) {
+            println!("skip {name}: not in --include list");
+            continue;
+        }
+        if matches(&exclude) {
+            println!("skip {name}: excluded");
+            continue;
         }
 
         // Checkout data + metadata.

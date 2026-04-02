@@ -70,6 +70,9 @@ pub enum PileCommand {
         /// Only include these branches (by name or hex ID). If omitted, all branches are included.
         #[arg(long)]
         include: Vec<String>,
+        /// Exclude these branches (by name or hex ID).
+        #[arg(long)]
+        exclude: Vec<String>,
         /// Optional signing key path
         #[arg(long)]
         signing_key: Option<PathBuf>,
@@ -105,7 +108,8 @@ pub fn run(cmd: PileCommand) -> Result<()> {
             source,
             dest,
             include,
+            exclude,
             signing_key,
-        } => squash::run(source, dest, signing_key, include),
+        } => squash::run(source, dest, signing_key, include, exclude),
     }
 }
