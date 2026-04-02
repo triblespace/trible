@@ -147,16 +147,10 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include
             }
         }
 
-        // 2. Store metadata blob (if any).
-        let metadata_handle = if !branch.metadata.is_empty() {
-            Some(
-                dst_pile
-                    .put(branch.metadata.clone().to_blob())
-                    .map_err(|e| anyhow!("put metadata: {e:?}"))?,
-            )
-        } else {
-            None
-        };
+        // 2. Store metadata blob.
+        let metadata_handle: Value<Handle<Blake3, SimpleArchive>> = dst_pile
+            .put(branch.metadata.clone().to_blob())
+            .map_err(|e| anyhow!("put metadata: {e:?}"))?;
 
         // 3. Build chunked commits directly from raw trible bytes.
         let total_bytes = branch.tribles.len() * TRIBLE_LEN;
@@ -199,7 +193,7 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include
                 parents,
                 Some(msg_handle),
                 Some(chunk_blob),
-                metadata_handle,
+                Some(metadata_handle),
             );
 
             let commit_handle = dst_pile
