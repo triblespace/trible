@@ -9,6 +9,7 @@ mod diagnose;
 mod merge;
 mod migrate;
 mod signing;
+mod squash;
 
 #[derive(Parser)]
 pub enum PileCommand {
@@ -55,6 +56,21 @@ pub enum PileCommand {
         #[command(subcommand)]
         cmd: migrate::Command,
     },
+    /// Squash all branch histories into single commits in a new pile.
+    ///
+    /// For each branch, the full accumulated content and metadata are
+    /// checked out and written as a single commit. Only blobs reachable
+    /// from the squashed content are copied. The result is a minimal
+    /// pile with clean commit timestamps and no orphaned data.
+    Squash {
+        /// Source pile file
+        source: PathBuf,
+        /// Destination pile file (will be created)
+        dest: PathBuf,
+        /// Optional signing key path
+        #[arg(long)]
+        signing_key: Option<PathBuf>,
+    },
 }
 
 pub fn run(cmd: PileCommand) -> Result<()> {
@@ -82,5 +98,10 @@ pub fn run(cmd: PileCommand) -> Result<()> {
         }
         PileCommand::Diagnose { cmd } => diagnose::run(cmd),
         PileCommand::Migrate { pile, cmd } => migrate::run(pile, cmd),
+        PileCommand::Squash {
+            source,
+            dest,
+            signing_key,
+        } => squash::run(source, dest, signing_key),
     }
 }
