@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use triblespace::prelude::*;
 use triblespace_core::blob::schemas::UnknownBlob;
-use triblespace_core::blob::Blob;
 use triblespace_core::blob::schemas::simplearchive::SimpleArchive;
+use triblespace_core::blob::Blob;
 use triblespace_core::repo;
 use triblespace_core::repo::pile::Pile;
 use triblespace_core::value::schemas::hash::Blake3;
@@ -17,7 +17,13 @@ use super::signing::load_signing_key;
 const CHUNK_TRIBLES: usize = 1 << 24;
 const TRIBLE_LEN: usize = 64;
 
-pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include: Vec<String>, exclude: Vec<String>) -> Result<()> {
+pub fn run(
+    source: PathBuf,
+    dest: PathBuf,
+    signing_key: Option<PathBuf>,
+    include: Vec<String>,
+    exclude: Vec<String>,
+) -> Result<()> {
     let key = load_signing_key(&signing_key)?;
 
     // Open source pile.
@@ -34,15 +40,27 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include
     let mut src_repo = Repository::new(src_pile, key.clone(), TribleSet::new())
         .map_err(|e| anyhow!("source repo: {e:?}"))?;
 
-    // Read all branches from source.
-    struct BranchData {
-        name: String,
-        tribles: Vec<[u8; TRIBLE_LEN]>,
-        metadata: TribleSet,
+    // Create source reader (self-contained via Arc<Mmap> clone).
+    let src_reader = src_repo
+        .storage_mut()
+        .reader()
+        .map_err(|e| anyhow!("source reader: {e:?}"))?;
+
+    // Create destination pile.
+    if dest.exists() && std::fs::metadata(&dest)?.len() > 0 {
+        return Err(anyhow!("destination {} already exists", dest.display()));
     }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::File::create(&dest)?;
+    let mut dst_pile: Pile<Blake3> = Pile::open(&dest)?;
 
-    let mut branches: Vec<BranchData> = Vec::new();
+    let mut total_blobs = 0usize;
+    let mut total_branches = 0usize;
 
+    // Process each branch: read → transfer blobs → write squashed commit.
+    // Branch data is dropped after each iteration to limit peak memory.
     for &bid in &branch_ids {
         let mut ws = match src_repo.pull(bid) {
             Ok(ws) => ws,
@@ -60,8 +78,9 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include
             let name_attr = triblespace_core::metadata::name.id();
             for t in meta.iter() {
                 if *t.a() == name_attr {
-                    let handle: Value<Handle<Blake3, triblespace_core::blob::schemas::longstring::LongString>> =
-                        Value::new(t.data[32..64].try_into().unwrap());
+                    let handle: Value<
+                        Handle<Blake3, triblespace_core::blob::schemas::longstring::LongString>,
+                    > = Value::new(t.data[32..64].try_into().unwrap());
                     let name_view: View<str> = reader.get(handle).ok()?;
                     return Some(name_view.to_string());
                 }
@@ -74,7 +93,8 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include
         let bid_hex = format!("{bid:X}");
         let bid_hex_lower = format!("{bid:x}");
         let matches = |list: &[String]| {
-            list.iter().any(|i| i == &name || i == &bid_hex || i == &bid_hex_lower)
+            list.iter()
+                .any(|i| i == &name || i == &bid_hex || i == &bid_hex_lower)
         };
         if !include.is_empty() && !matches(&include) {
             println!("skip {name}: not in --include list");
@@ -100,40 +120,23 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include
         }
 
         // Collect raw tribles and sort for canonical archive order.
+        let num_tribles = data.len();
         let mut tribles: Vec<[u8; TRIBLE_LEN]> = data.iter().map(|t| t.data).collect();
         tribles.sort_unstable();
 
-        println!("read {name}: {} tribles, {} metadata tribles", tribles.len(), metadata.len());
-        branches.push(BranchData { name, tribles, metadata });
-    }
+        println!(
+            "read {name}: {} tribles, {} metadata tribles",
+            num_tribles,
+            metadata.len()
+        );
 
-    // Get source reader for blob transfer.
-    let src_reader = src_repo
-        .storage_mut()
-        .reader()
-        .map_err(|e| anyhow!("source reader: {e:?}"))?;
-
-    // Create destination pile.
-    if dest.exists() && std::fs::metadata(&dest)?.len() > 0 {
-        return Err(anyhow!("destination {} already exists", dest.display()));
-    }
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::File::create(&dest)?;
-    let mut dst_pile: Pile<Blake3> = Pile::open(&dest)?;
-
-    let mut total_blobs = 0usize;
-    let mut total_branches = 0usize;
-
-    for branch in &branches {
         // 1. Transfer referenced blobs from source.
         let mut roots: Vec<Value<Handle<Blake3, UnknownBlob>>> = Vec::new();
-        for trible in &branch.tribles {
+        for trible in &tribles {
             let raw: [u8; 32] = trible[32..64].try_into().unwrap();
             roots.push(Value::<Handle<Blake3, UnknownBlob>>::new(raw));
         }
-        for trible in branch.metadata.iter() {
+        for trible in metadata.iter() {
             let raw: [u8; 32] = trible.data[32..64].try_into().unwrap();
             roots.push(Value::<Handle<Blake3, UnknownBlob>>::new(raw));
         }
@@ -143,25 +146,30 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include
         for r in repo::transfer(&src_reader, &mut dst_pile, reachable) {
             match r {
                 Ok(_) => branch_blobs += 1,
-                Err(_) => {}
+                Err(repo::TransferError::Store(e)) => {
+                    return Err(anyhow!("blob write failed for {name}: {e}"));
+                }
+                Err(_) => {} // Speculative handle that wasn't a real blob.
             }
         }
 
         // 2. Store metadata blob.
         let metadata_handle: Value<Handle<Blake3, SimpleArchive>> = dst_pile
-            .put(branch.metadata.clone().to_blob())
+            .put(metadata.to_blob())
             .map_err(|e| anyhow!("put metadata: {e:?}"))?;
 
         // 3. Build chunked commits directly from raw trible bytes.
-        let total_bytes = branch.tribles.len() * TRIBLE_LEN;
+        let total_bytes = num_tribles * TRIBLE_LEN;
+        // Transmute Vec<[u8; 64]> → Vec<u8> in-place (no copy).
+        // Sound: [u8; 64] is contiguous, no padding, alignment 1.
         let trible_bytes = {
-            // Safety: [u8; 64] has no padding, Vec<[u8; 64]> is contiguous.
-            let ptr = branch.tribles.as_ptr() as *const u8;
-            let slice = unsafe { std::slice::from_raw_parts(ptr, total_bytes) };
-            anybytes::Bytes::from_source(slice.to_vec())
+            let mut v = std::mem::ManuallyDrop::new(tribles);
+            let ptr = v.as_mut_ptr() as *mut u8;
+            let cap = v.capacity() * TRIBLE_LEN;
+            anybytes::Bytes::from_source(unsafe { Vec::from_raw_parts(ptr, total_bytes, cap) })
         };
 
-        let num_chunks = (branch.tribles.len() + CHUNK_TRIBLES - 1) / CHUNK_TRIBLES;
+        let num_chunks = (num_tribles + CHUNK_TRIBLES - 1) / CHUNK_TRIBLES;
         let mut prev_commit: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
 
         for i in 0..num_chunks {
@@ -171,15 +179,15 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include
             let chunk_blob: Blob<SimpleArchive> = Blob::new(chunk_bytes);
 
             // Store the chunk content blob.
-            let content_handle: Value<Handle<Blake3, SimpleArchive>> = dst_pile
+            let _content_handle: Value<Handle<Blake3, SimpleArchive>> = dst_pile
                 .put(chunk_blob.clone())
                 .map_err(|e| anyhow!("put chunk: {e:?}"))?;
 
             // Build commit metadata.
             let msg_text = if num_chunks == 1 {
-                format!("squashed {}", branch.name)
+                format!("squashed {}", name)
             } else {
-                format!("squashed {} ({}/{})", branch.name, i + 1, num_chunks)
+                format!("squashed {} ({}/{})", name, i + 1, num_chunks)
             };
             let msg_blob: Blob<triblespace_core::blob::schemas::longstring::LongString> =
                 triblespace_core::blob::ToBlob::to_blob(msg_text);
@@ -204,15 +212,12 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include
 
             if num_chunks > 1 {
                 let chunk_tribles = (end - start) / TRIBLE_LEN;
-                println!(
-                    "  chunk {}/{}: {} tribles",
-                    i + 1, num_chunks, chunk_tribles
-                );
+                println!("  chunk {}/{}: {} tribles", i + 1, num_chunks, chunk_tribles);
             }
         }
 
         // 4. Create branch pointing to the final commit.
-        let head_commit = prev_commit.ok_or_else(|| anyhow!("no commits for {}", branch.name))?;
+        let head_commit = prev_commit.ok_or_else(|| anyhow!("no commits for {name}"))?;
         let head_blob: TribleSet = dst_pile
             .reader()
             .map_err(|e| anyhow!("reader: {e:?}"))?
@@ -220,7 +225,9 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include
             .map_err(|e| anyhow!("get commit: {e:?}"))?;
 
         let name_handle = dst_pile
-            .put(triblespace_core::blob::ToBlob::<triblespace_core::blob::schemas::longstring::LongString>::to_blob(branch.name.clone()))
+            .put(triblespace_core::blob::ToBlob::<
+                triblespace_core::blob::schemas::longstring::LongString,
+            >::to_blob(name.clone()))
             .map_err(|e| anyhow!("put name: {e:?}"))?;
 
         let branch_id = triblespace_core::id::genid();
@@ -240,12 +247,8 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include
             .map_err(|e| anyhow!("update branch: {e:?}"))?;
 
         println!(
-            "wrote {}: {} tribles ({} chunk{}), {} blobs",
-            branch.name,
-            branch.tribles.len(),
-            num_chunks,
+            "wrote {name}: {num_tribles} tribles ({num_chunks} chunk{}), {branch_blobs} blobs",
             if num_chunks != 1 { "s" } else { "" },
-            branch_blobs,
         );
 
         total_blobs += branch_blobs;
@@ -258,15 +261,16 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>, include
     let src_size = std::fs::metadata(&source)?.len();
     let dst_size = std::fs::metadata(&dest)?.len();
     println!(
-        "\nSquashed {} branches, {} blobs",
-        total_branches, total_blobs,
+        "\nSquashed {total_branches} branches, {total_blobs} blobs",
     );
-    println!(
-        "Size: {} → {} ({:.1}%)",
-        format_size(src_size),
-        format_size(dst_size),
-        (dst_size as f64 / src_size as f64) * 100.0,
-    );
+    if src_size > 0 {
+        println!(
+            "Size: {} → {} ({:.1}%)",
+            format_size(src_size),
+            format_size(dst_size),
+            (dst_size as f64 / src_size as f64) * 100.0,
+        );
+    }
 
     Ok(())
 }
