@@ -160,14 +160,7 @@ pub fn run(
 
         // 3. Build chunked commits directly from raw trible bytes.
         let total_bytes = num_tribles * TRIBLE_LEN;
-        // Transmute Vec<[u8; 64]> → Vec<u8> in-place (no copy).
-        // Sound: [u8; 64] is contiguous, no padding, alignment 1.
-        let trible_bytes = {
-            let mut v = std::mem::ManuallyDrop::new(tribles);
-            let ptr = v.as_mut_ptr() as *mut u8;
-            let cap = v.capacity() * TRIBLE_LEN;
-            anybytes::Bytes::from_source(unsafe { Vec::from_raw_parts(ptr, total_bytes, cap) })
-        };
+        let trible_bytes = anybytes::Bytes::from_source(tribles);
 
         let num_chunks = (num_tribles + CHUNK_TRIBLES - 1) / CHUNK_TRIBLES;
         let mut prev_commit: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
