@@ -67,6 +67,9 @@ pub enum PileCommand {
         source: PathBuf,
         /// Destination pile file (will be created)
         dest: PathBuf,
+        /// Only include these branches (by name or hex ID). If omitted, all branches are included.
+        #[arg(long)]
+        include: Vec<String>,
         /// Optional signing key path
         #[arg(long)]
         signing_key: Option<PathBuf>,
@@ -101,7 +104,8 @@ pub fn run(cmd: PileCommand) -> Result<()> {
         PileCommand::Squash {
             source,
             dest,
+            include,
             signing_key,
-        } => squash::run(source, dest, signing_key),
+        } => squash::run(source, dest, signing_key, include),
     }
 }
