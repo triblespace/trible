@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use triblespace::prelude::*;
 use triblespace_core::blob::schemas::UnknownBlob;
 use triblespace_core::blob::Blob;
+use triblespace_core::blob::schemas::simplearchive::SimpleArchive;
 use triblespace_core::repo;
 use triblespace_core::repo::pile::Pile;
 use triblespace_core::value::schemas::hash::Blake3;
@@ -12,6 +13,10 @@ use triblespace_core::value::Value;
 
 use super::signing::load_signing_key;
 
+/// 2^24 tribles × 64 bytes = exactly 1 GiB per chunk.
+const CHUNK_TRIBLES: usize = 1 << 24;
+const TRIBLE_LEN: usize = 64;
+
 pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>) -> Result<()> {
     let key = load_signing_key(&signing_key)?;
 
@@ -19,21 +24,20 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>) -> Resu
     let mut src_pile: Pile<Blake3> = Pile::open(&source)?;
     src_pile.restore().map_err(|e| anyhow!("restore source: {e:?}"))?;
 
-    // Enumerate branches from source.
+    // Enumerate branches.
     let branch_ids: Vec<Id> = src_pile
         .branches()
         .map_err(|e| anyhow!("branches: {e:?}"))?
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| anyhow!("branch iter: {e:?}"))?;
 
-    // Create source repository for checkout.
     let mut src_repo = Repository::new(src_pile, key.clone(), TribleSet::new())
         .map_err(|e| anyhow!("source repo: {e:?}"))?;
 
-    // Resolve branch names and checkout data from source.
+    // Read all branches from source.
     struct BranchData {
         name: String,
-        data: TribleSet,
+        tribles: Vec<[u8; TRIBLE_LEN]>,
         metadata: TribleSet,
     }
 
@@ -43,12 +47,12 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>) -> Resu
         let mut ws = match src_repo.pull(bid) {
             Ok(ws) => ws,
             Err(e) => {
-                eprintln!("skip {bid:X}: pull failed: {e:?}");
+                eprintln!("skip {bid:X}: pull: {e:?}");
                 continue;
             }
         };
 
-        // Get branch name from branch metadata.
+        // Resolve branch name.
         let name = (|| -> Option<String> {
             let meta_handle = src_repo.storage_mut().head(bid).ok()??;
             let reader = src_repo.storage_mut().reader().ok()?;
@@ -70,7 +74,7 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>) -> Resu
         let (data, metadata) = match ws.checkout_with_metadata(..) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("skip {name}: checkout failed: {e:?}");
+                eprintln!("skip {name}: checkout: {e:?}");
                 continue;
             }
         };
@@ -80,16 +84,12 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>) -> Resu
             continue;
         }
 
-        println!(
-            "read {name}: {} data tribles, {} metadata tribles",
-            data.len(),
-            metadata.len()
-        );
-        branches.push(BranchData {
-            name,
-            data,
-            metadata,
-        });
+        // Collect raw tribles and sort for canonical archive order.
+        let mut tribles: Vec<[u8; TRIBLE_LEN]> = data.iter().map(|t| t.data).collect();
+        tribles.sort_unstable();
+
+        println!("read {name}: {} tribles, {} metadata tribles", tribles.len(), metadata.len());
+        branches.push(BranchData { name, tribles, metadata });
     }
 
     // Get source reader for blob transfer.
@@ -98,12 +98,9 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>) -> Resu
         .reader()
         .map_err(|e| anyhow!("source reader: {e:?}"))?;
 
-    // Create destination pile (refuse to overwrite).
+    // Create destination pile.
     if dest.exists() && std::fs::metadata(&dest)?.len() > 0 {
-        return Err(anyhow!(
-            "destination {} already exists — refusing to overwrite",
-            dest.display()
-        ));
+        return Err(anyhow!("destination {} already exists", dest.display()));
     }
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
@@ -111,15 +108,14 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>) -> Resu
     std::fs::File::create(&dest)?;
     let mut dst_pile: Pile<Blake3> = Pile::open(&dest)?;
 
-    // For each branch: transfer referenced blobs, create squashed commit.
     let mut total_blobs = 0usize;
     let mut total_branches = 0usize;
 
     for branch in &branches {
-        // Collect all potential blob handles from data + metadata values.
+        // 1. Transfer referenced blobs from source.
         let mut roots: Vec<Value<Handle<Blake3, UnknownBlob>>> = Vec::new();
-        for trible in branch.data.iter() {
-            let raw: [u8; 32] = trible.data[32..64].try_into().unwrap();
+        for trible in &branch.tribles {
+            let raw: [u8; 32] = trible[32..64].try_into().unwrap();
             roots.push(Value::<Handle<Blake3, UnknownBlob>>::new(raw));
         }
         for trible in branch.metadata.iter() {
@@ -127,56 +123,124 @@ pub fn run(source: PathBuf, dest: PathBuf, signing_key: Option<PathBuf>) -> Resu
             roots.push(Value::<Handle<Blake3, UnknownBlob>>::new(raw));
         }
 
-        // Transfer reachable blobs from source to dest.
         let reachable = repo::reachable(&src_reader, roots);
         let mut branch_blobs = 0usize;
         for r in repo::transfer(&src_reader, &mut dst_pile, reachable) {
             match r {
                 Ok(_) => branch_blobs += 1,
-                Err(_) => {} // Non-blob values tried as handles — expected, ignore.
+                Err(_) => {}
             }
         }
 
-        // Create repository on dest for this branch.
-        // We need a fresh repo each time because create_branch needs it.
-        let mut dst_repo = Repository::new(dst_pile, key.clone(), TribleSet::new())
-            .map_err(|e| anyhow!("dest repo: {e:?}"))?;
-
-        let branch_id = dst_repo
-            .create_branch(&branch.name, None)
-            .map_err(|e| anyhow!("create branch '{}': {e:?}", branch.name))?;
-        let mut ws = dst_repo
-            .pull(*branch_id)
-            .map_err(|e| anyhow!("pull dest branch: {e:?}"))?;
-
-        if branch.metadata.is_empty() {
-            ws.commit(branch.data.clone(), &format!("squashed {}", branch.name));
+        // 2. Store metadata blob (if any).
+        let metadata_handle = if !branch.metadata.is_empty() {
+            Some(
+                dst_pile
+                    .put(branch.metadata.clone().to_blob())
+                    .map_err(|e| anyhow!("put metadata: {e:?}"))?,
+            )
         } else {
-            let meta_handle = ws.put(branch.metadata.clone().to_blob());
-            ws.commit_with_metadata(
-                branch.data.clone(),
-                meta_handle,
-                &format!("squashed {}", branch.name),
+            None
+        };
+
+        // 3. Build chunked commits directly from raw trible bytes.
+        let total_bytes = branch.tribles.len() * TRIBLE_LEN;
+        let trible_bytes = {
+            // Safety: [u8; 64] has no padding, Vec<[u8; 64]> is contiguous.
+            let ptr = branch.tribles.as_ptr() as *const u8;
+            let slice = unsafe { std::slice::from_raw_parts(ptr, total_bytes) };
+            anybytes::Bytes::from_source(slice.to_vec())
+        };
+
+        let num_chunks = (branch.tribles.len() + CHUNK_TRIBLES - 1) / CHUNK_TRIBLES;
+        let mut prev_commit: Option<Value<Handle<Blake3, SimpleArchive>>> = None;
+
+        for i in 0..num_chunks {
+            let start = i * CHUNK_TRIBLES * TRIBLE_LEN;
+            let end = ((i + 1) * CHUNK_TRIBLES * TRIBLE_LEN).min(total_bytes);
+            let chunk_bytes = trible_bytes.slice(start..end);
+            let chunk_blob: Blob<SimpleArchive> = Blob::new(chunk_bytes);
+
+            // Store the chunk content blob.
+            let content_handle: Value<Handle<Blake3, SimpleArchive>> = dst_pile
+                .put(chunk_blob.clone())
+                .map_err(|e| anyhow!("put chunk: {e:?}"))?;
+
+            // Build commit metadata.
+            let msg_text = if num_chunks == 1 {
+                format!("squashed {}", branch.name)
+            } else {
+                format!("squashed {} ({}/{})", branch.name, i + 1, num_chunks)
+            };
+            let msg_blob: Blob<triblespace_core::blob::schemas::longstring::LongString> =
+                triblespace_core::blob::ToBlob::to_blob(msg_text);
+            let msg_handle = dst_pile
+                .put(msg_blob)
+                .map_err(|e| anyhow!("put message: {e:?}"))?;
+
+            let parents = prev_commit.iter().copied();
+            let commit_set = repo::commit::commit_metadata(
+                &key,
+                parents,
+                Some(msg_handle),
+                Some(chunk_blob),
+                metadata_handle,
             );
+
+            let commit_handle = dst_pile
+                .put(commit_set)
+                .map_err(|e| anyhow!("put commit: {e:?}"))?;
+
+            prev_commit = Some(commit_handle.transmute());
+
+            if num_chunks > 1 {
+                let chunk_tribles = (end - start) / TRIBLE_LEN;
+                println!(
+                    "  chunk {}/{}: {} tribles",
+                    i + 1, num_chunks, chunk_tribles
+                );
+            }
         }
 
-        dst_repo
-            .push(&mut ws)
-            .map_err(|e| anyhow!("push '{}': {e:?}", branch.name))?;
+        // 4. Create branch pointing to the final commit.
+        let head_commit = prev_commit.ok_or_else(|| anyhow!("no commits for {}", branch.name))?;
+        let head_blob: TribleSet = dst_pile
+            .reader()
+            .map_err(|e| anyhow!("reader: {e:?}"))?
+            .get(head_commit)
+            .map_err(|e| anyhow!("get commit: {e:?}"))?;
+
+        let name_handle = dst_pile
+            .put(triblespace_core::blob::ToBlob::<triblespace_core::blob::schemas::longstring::LongString>::to_blob(branch.name.clone()))
+            .map_err(|e| anyhow!("put name: {e:?}"))?;
+
+        let branch_id = triblespace_core::id::genid();
+        let branch_meta = repo::branch::branch_metadata(
+            &key,
+            *branch_id,
+            name_handle,
+            Some(head_blob.to_blob()),
+        );
+
+        let branch_meta_handle = dst_pile
+            .put(branch_meta)
+            .map_err(|e| anyhow!("put branch meta: {e:?}"))?;
+
+        dst_pile
+            .update(*branch_id, None, Some(branch_meta_handle))
+            .map_err(|e| anyhow!("update branch: {e:?}"))?;
 
         println!(
-            "wrote {}: {} data, {} metadata, {} blobs",
+            "wrote {}: {} tribles ({} chunk{}), {} blobs",
             branch.name,
-            branch.data.len(),
-            branch.metadata.len(),
+            branch.tribles.len(),
+            num_chunks,
+            if num_chunks != 1 { "s" } else { "" },
             branch_blobs,
         );
 
         total_blobs += branch_blobs;
         total_branches += 1;
-
-        // Take the pile back out of the repo for the next iteration.
-        dst_pile = dst_repo.into_storage();
     }
 
     dst_pile.close().map_err(|e| anyhow!("close dest: {e:?}"))?;
