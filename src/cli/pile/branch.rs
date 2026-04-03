@@ -1376,7 +1376,8 @@ pub fn run(cmd: Command) -> Result<()> {
                                 let phex: String = ph.from_value();
                                 phex[..16].to_string()
                             }).collect();
-                            println!("Parent: {}", parent_strs.join(" "));
+                            let label = if info.parents.len() > 1 { "Merge: " } else { "Parent:" };
+                            println!("{label} {}", parent_strs.join(" "));
                         }
                         println!();
                         println!("    {msg}");
