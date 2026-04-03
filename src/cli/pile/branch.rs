@@ -189,6 +189,9 @@ pub enum Command {
         /// Maximum commits to print
         #[arg(long, default_value_t = 50)]
         limit: usize,
+        /// Compact one-line-per-commit format
+        #[arg(long)]
+        oneline: bool,
     },
     /// Census attribute IDs across all commits in a branch.
     Describe {
@@ -1262,6 +1265,7 @@ pub fn run(cmd: Command) -> Result<()> {
             pile,
             branch,
             limit,
+            oneline,
         } => {
             use std::collections::HashSet;
             use triblespace_core::repo::pile::Pile;
@@ -1355,11 +1359,31 @@ pub fn run(cmd: Command) -> Result<()> {
                         "?".to_string()
                     };
 
-                    println!(
-                        "{hex}  {ts_str}  parents={np}  tribles={tc}  {msg}",
-                        np = info.parents.len(),
-                        tc = content_count,
-                    );
+                    if oneline {
+                        println!(
+                            "\x1b[33m{short}\x1b[0m  {ts_str}  {msg}",
+                            short = &hex[..16],
+                        );
+                    } else {
+                        println!("\x1b[33mcommit {hex}\x1b[0m");
+                        if let Some(pk) = &info.signed_by {
+                            println!("Signed: {}", hex::encode(&pk[..8]));
+                        }
+                        println!("Date:   {ts_str}");
+                        if !info.parents.is_empty() {
+                            let parent_strs: Vec<String> = info.parents.iter().map(|p| {
+                                let ph: Value<Hash<Blake3>> = Handle::to_hash(*p);
+                                let phex: String = ph.from_value();
+                                phex[..16].to_string()
+                            }).collect();
+                            println!("Parent: {}", parent_strs.join(" "));
+                        }
+                        println!();
+                        println!("    {msg}");
+                        println!();
+                        println!("    {content_count} tribles");
+                        println!();
+                    }
                     printed += 1;
 
                     for p in &info.parents {
