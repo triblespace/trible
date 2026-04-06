@@ -35,7 +35,7 @@ use triblespace_core::value::Value;
 use triblespace_core::value::schemas::hash::{Blake3, Handle, Hash};
 use ed25519_dalek::SigningKey;
 
-use super::signing::load_signing_key;
+use super::signing::load_or_create_pile_key;
 
 /// ALPN protocol identifier for triblespace pile sync.
 const PILE_SYNC_ALPN: &[u8] = b"/triblespace/pile-sync/1";
@@ -45,8 +45,12 @@ const PILE_SYNC_ALPN: &[u8] = b"/triblespace/pile-sync/1";
 #[derive(Parser)]
 pub enum Command {
     /// Show this pile's network identity (ed25519 public key / iroh node ID).
+    ///
+    /// If no key exists yet, one is generated and saved to `<pile>.key`.
     Identity {
-        /// Signing key file (64-char hex seed). Falls back to TRIBLES_SIGNING_KEY env var.
+        /// Path to the pile file
+        pile: PathBuf,
+        /// Signing key file (overrides auto-discovery).
         #[arg(long)]
         signing_key: Option<PathBuf>,
     },
@@ -75,7 +79,7 @@ pub enum Command {
 
 pub fn run(cmd: Command) -> Result<()> {
     match cmd {
-        Command::Identity { signing_key } => run_identity(signing_key),
+        Command::Identity { pile, signing_key } => run_identity(pile, signing_key),
         Command::Up { pile, signing_key } => run_up(pile, signing_key),
         Command::Pull { pile, remote, branch, signing_key } => {
             run_pull(pile, remote, branch, signing_key)
@@ -85,8 +89,8 @@ pub fn run(cmd: Command) -> Result<()> {
 
 // ── Identity ─────────────────────────────────────────────────────────
 
-fn run_identity(signing_key_path: Option<PathBuf>) -> Result<()> {
-    let signing_key = load_signing_key(&signing_key_path)?;
+fn run_identity(pile_path: PathBuf, signing_key_path: Option<PathBuf>) -> Result<()> {
+    let signing_key = load_or_create_pile_key(&signing_key_path, &pile_path)?;
     let iroh_secret = iroh_secret_from_signing_key(&signing_key);
     let public = iroh_secret.public();
     println!("node: {public}");
@@ -98,7 +102,7 @@ fn run_identity(signing_key_path: Option<PathBuf>) -> Result<()> {
 fn run_up(pile_path: PathBuf, signing_key_path: Option<PathBuf>) -> Result<()> {
     let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;
     rt.block_on(async {
-        let signing_key = load_signing_key(&signing_key_path)?;
+        let signing_key = load_or_create_pile_key(&signing_key_path, &pile_path)?;
         let iroh_secret = iroh_secret_from_signing_key(&signing_key);
         let public = iroh_secret.public();
 
@@ -133,7 +137,7 @@ fn run_pull(
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;
     rt.block_on(async {
-        let signing_key = load_signing_key(&signing_key_path)?;
+        let signing_key = load_or_create_pile_key(&signing_key_path, &pile_path)?;
         let iroh_secret = iroh_secret_from_signing_key(&signing_key);
 
         let endpoint = Endpoint::builder(presets::N0)
@@ -177,7 +181,7 @@ fn run_pull(
 
             // Import into local pile
             let pile = open_pile(&pile_path)?;
-            let signing_key = load_signing_key(&signing_key_path)?;
+            let signing_key = load_or_create_pile_key(&signing_key_path, &pile_path)?;
             let mut repo = Repository::new(pile, signing_key, TribleSet::new())
                 .map_err(|e| anyhow!("create repo: {e:?}"))?;
 
