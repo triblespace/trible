@@ -12,9 +12,11 @@
 //! walking yet.  A full branch checkout is serialized as a SimpleArchive
 //! blob and transferred in one shot.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
+use anybytes::Bytes;
 use clap::Parser;
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::endpoint::{Connection, presets};
@@ -23,12 +25,14 @@ use iroh_base::SecretKey;
 use triblespace_core::blob::ToBlob;
 use triblespace_core::blob::TryFromBlob;
 use triblespace_core::blob::Blob;
+use triblespace_core::blob::schemas::UnknownBlob;
 use triblespace_core::blob::schemas::simplearchive::SimpleArchive;
 use triblespace_core::id::Id;
 use triblespace_core::repo::{BlobStore, BlobStoreGet, BlobStorePut, BranchStore, Repository};
 use triblespace_core::repo::pile::Pile;
 use triblespace_core::trible::TribleSet;
-use triblespace_core::value::schemas::hash::Blake3;
+use triblespace_core::value::Value;
+use triblespace_core::value::schemas::hash::{Blake3, Handle, Hash};
 use ed25519_dalek::SigningKey;
 
 use super::signing::load_signing_key;
@@ -159,23 +163,51 @@ fn run_pull(
         let header = recv_line(&mut recv).await?;
 
         if let Some(rest) = header.strip_prefix("SNAPSHOT ") {
-            let len: usize = rest.trim().parse()
-                .map_err(|e| anyhow!("bad length: {e}"))?;
-            eprintln!("receiving {len} bytes...");
+            let parts: Vec<&str> = rest.trim().splitn(2, ' ').collect();
+            let trible_len: usize = parts[0].parse()
+                .map_err(|e| anyhow!("bad trible length: {e}"))?;
+            let n_blobs: usize = if parts.len() > 1 {
+                parts[1].parse().unwrap_or(0)
+            } else {
+                0
+            };
+            eprintln!("receiving {trible_len} bytes + {n_blobs} blobs...");
 
-            let data = recv_exact(&mut recv, len).await?;
+            let trible_data = recv_exact(&mut recv, trible_len).await?;
 
-            // Import into local pile as a new commit on the branch
-            let mut pile = open_pile(&pile_path)?;
+            // Import into local pile
+            let pile = open_pile(&pile_path)?;
             let signing_key = load_signing_key(&signing_key_path)?;
             let mut repo = Repository::new(pile, signing_key, TribleSet::new())
                 .map_err(|e| anyhow!("create repo: {e:?}"))?;
+
+            // Receive and store blobs first (so trible handles resolve)
+            let mut blobs_received = 0usize;
+            for _ in 0..n_blobs {
+                let blob_header = recv_line(&mut recv).await?;
+                if let Some(rest) = blob_header.strip_prefix("BLOB ") {
+                    let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+                    if parts.len() == 2 {
+                        let blob_len: usize = parts[1].parse()
+                            .map_err(|e| anyhow!("bad blob length: {e}"))?;
+                        let blob_data = recv_exact(&mut recv, blob_len).await?;
+                        let bytes: Bytes = blob_data.into();
+                        let _handle: Value<Handle<Blake3, UnknownBlob>> =
+                            repo.storage_mut().put::<UnknownBlob, Bytes>(bytes)
+                                .map_err(|e| anyhow!("put blob: {e:?}"))?;
+                        blobs_received += 1;
+                    }
+                }
+            }
+            if blobs_received > 0 {
+                eprintln!("{blobs_received} blobs stored.");
+            }
 
             let branch_id = repo.ensure_branch(&branch_name, None)
                 .map_err(|e| anyhow!("ensure branch: {e:?}"))?;
 
             // Deserialize the snapshot into a TribleSet
-            let blob: Blob<SimpleArchive> = Blob::new(data.into());
+            let blob: Blob<SimpleArchive> = Blob::new(trible_data.into());
             let remote_facts: TribleSet = blob.try_from_blob()
                 .map_err(|e| anyhow!("bad archive: {e}"))?;
 
@@ -186,7 +218,7 @@ fn run_pull(
                 .map_err(|e| anyhow!("checkout: {e:?}"))?
                 .into_facts();
 
-            // Compute the delta (what the remote has that we don't)
+            // Compute the delta
             let delta = remote_facts.difference(&local_facts);
             if delta.is_empty() {
                 eprintln!("already up to date.");
@@ -251,19 +283,42 @@ impl ProtocolHandler for PileSyncHandler {
                     .map_err(|e| anyhow!("checkout: {e:?}"))?
                     .into_facts();
 
-                // Serialize as SimpleArchive
+                // Transfer all blobs in the pile. For hackathon-sized piles
+                // this is fast; can optimize to per-branch blob walking later.
+                let mut blob_pile = open_pile(&pile_path)?;
+                let reader = BlobStore::<Blake3>::reader(&mut blob_pile)
+                    .map_err(|e| anyhow!("reader: {e:?}"))?;
+                let mut blobs_data: Vec<(String, Vec<u8>)> = Vec::new();
+                for item in reader.iter() {
+                    let (handle, blob) = item.map_err(|e| anyhow!("blob iter: {e:?}"))?;
+                    let hash_hex = hex::encode(handle.raw);
+                    blobs_data.push((hash_hex, blob.bytes.to_vec()));
+                }
+                let _ = blob_pile.close();
+
+                // Serialize tribles as SimpleArchive
                 let n_tribles = facts.len();
                 let blob: Blob<SimpleArchive> = facts.to_blob();
-                let data = &blob.bytes;
+                let trible_data = &blob.bytes;
 
-                let header = format!("SNAPSHOT {}\n", data.len());
+                // Send: SNAPSHOT <trible_bytes_len> <n_blobs>
+                let header = format!("SNAPSHOT {} {}\n", trible_data.len(), blobs_data.len());
                 send.write_all(header.as_bytes()).await
                     .map_err(|e| anyhow!("write header: {e}"))?;
-                send.write_all(data).await
-                    .map_err(|e| anyhow!("write data: {e}"))?;
-                send.finish().map_err(|e| anyhow!("finish: {e}"))?;
+                send.write_all(trible_data).await
+                    .map_err(|e| anyhow!("write tribles: {e}"))?;
 
-                eprintln!("  sent {} bytes ({} tribles)", data.len(), n_tribles);
+                // Send each blob: BLOB <hash> <length>\n<data>
+                for (hash_hex, data) in &blobs_data {
+                    let blob_header = format!("BLOB {} {}\n", hash_hex, data.len());
+                    send.write_all(blob_header.as_bytes()).await
+                        .map_err(|e| anyhow!("write blob header: {e}"))?;
+                    send.write_all(data).await
+                        .map_err(|e| anyhow!("write blob data: {e}"))?;
+                }
+
+                send.finish().map_err(|e| anyhow!("finish: {e}"))?;
+                eprintln!("  sent {} tribles + {} blobs", n_tribles, blobs_data.len());
                 let _ = repo.close();
             } else {
                 let msg = format!("ERROR unknown request: {request_str}\n");
