@@ -21,7 +21,10 @@ use clap::Parser;
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::endpoint::{Connection, presets};
 use iroh::Endpoint;
-use iroh_base::{EndpointId, SecretKey};
+use iroh_base::{EndpointAddr, EndpointId, SecretKey};
+use iroh_gossip::{Gossip, TopicId};
+use iroh_gossip::api::Event as GossipEvent;
+use futures::TryStreamExt;
 use triblespace_core::blob::ToBlob;
 use triblespace_core::blob::TryFromBlob;
 use triblespace_core::blob::Blob;
@@ -75,26 +78,20 @@ pub enum Command {
         #[arg(long)]
         signing_key: Option<PathBuf>,
     },
-    /// Live sync: serve pull requests + periodically pull from peers.
+    /// Live sync: gossip-based continuous sync with peers.
     ///
-    /// Combines `up` (serve) with periodic polling of known peers.
-    /// Every `--interval` seconds, pulls the specified branches from
-    /// each peer.
+    /// Combines `up` (serve pull requests) with a gossip swarm.
+    /// When a peer announces a branch update, auto-pulls it. When
+    /// a new neighbor joins, announces all local branches.
     Live {
         /// Path to the pile file
         pile: PathBuf,
-        /// Peer node IDs to sync with (comma-separated).
+        /// Topic name (hashed to 32 bytes). All nodes with the same topic sync together.
+        #[arg(long, default_value = "triblespace")]
+        topic: String,
+        /// Bootstrap peer node IDs (comma-separated).
         #[arg(long, value_delimiter = ',')]
         peers: Vec<String>,
-        /// Branches to sync.
-        #[arg(long, default_values_t = vec![
-            "compass".to_string(), "wiki".to_string(),
-            "local-messages".to_string(), "relations".to_string(),
-        ])]
-        branch: Vec<String>,
-        /// Poll interval in seconds.
-        #[arg(long, default_value = "10")]
-        interval: u64,
         /// Signing key file
         #[arg(long)]
         signing_key: Option<PathBuf>,
@@ -108,8 +105,8 @@ pub fn run(cmd: Command) -> Result<()> {
         Command::Pull { pile, remote, branch, signing_key } => {
             run_pull(pile, remote, branch, signing_key)
         }
-        Command::Live { pile, peers, branch, interval, signing_key } => {
-            run_live(pile, peers, branch, interval, signing_key)
+        Command::Live { pile, topic, peers, signing_key } => {
+            run_live(pile, topic, peers, signing_key)
         }
     }
 }
@@ -416,13 +413,17 @@ fn iroh_secret_from_signing_key(key: &SigningKey) -> SecretKey {
     SecretKey::from(key.to_bytes())
 }
 
-// ── Live polling sync ────────────────────────────────────────────────
+// ── Live gossip sync ─────────────────────────────────────────────────
+
+/// Well-known faculty branch names announced to the swarm.
+const ANNOUNCE_BRANCHES: &[&str] = &[
+    "compass", "wiki", "local-messages", "relations", "files",
+];
 
 fn run_live(
     pile_path: PathBuf,
+    topic_name: String,
     peer_strs: Vec<String>,
-    branches: Vec<String>,
-    interval_secs: u64,
     signing_key_path: Option<PathBuf>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;
@@ -431,8 +432,10 @@ fn run_live(
         let iroh_secret = iroh_secret_from_signing_key(&signing_key);
         let public = iroh_secret.public();
 
-        let peer_keys: Vec<iroh_base::PublicKey> = peer_strs.iter()
-            .filter_map(|s| s.parse().ok())
+        let topic_id = TopicId::from_bytes(*blake3::hash(topic_name.as_bytes()).as_bytes());
+
+        let bootstrap_ids: Vec<EndpointId> = peer_strs.iter()
+            .filter_map(|s| s.parse::<iroh_base::PublicKey>().ok().map(EndpointId::from))
             .collect();
 
         let endpoint = Endpoint::builder(presets::N0)
@@ -441,24 +444,50 @@ fn run_live(
             .await
             .map_err(|e| anyhow!("bind: {e}"))?;
 
+        // Wait for relay connection so peers can find us.
+        endpoint.online().await;
+
+        // Set up pile sync handler (for serving pull requests)
         let handler = PileSyncHandler {
             pile_path: pile_path.clone(),
             signing_key: signing_key.clone(),
         };
 
+        // Set up gossip
+        let gossip = Gossip::builder().spawn(endpoint.clone());
+
         let router = Router::builder(endpoint.clone())
             .accept(PILE_SYNC_ALPN, handler)
+            .accept(iroh_gossip::ALPN, gossip.clone())
             .spawn();
 
         eprintln!("node: {public}");
-        eprintln!("syncing {} branch(es) with {} peer(s) every {interval_secs}s",
-            branches.len(), peer_keys.len());
-        eprintln!("branches: {}", branches.join(", "));
+        eprintln!("topic: {topic_name}");
+        eprintln!("peers: {}", if bootstrap_ids.is_empty() { "none (waiting for connections)".into() } else { format!("{}", bootstrap_ids.len()) });
+
+        // Subscribe to gossip topic (non-blocking — we handle joins via events)
+        let topic = gossip.subscribe(topic_id, bootstrap_ids).await
+            .map_err(|e| anyhow!("subscribe: {e}"))?;
+        let (sender, mut receiver) = topic.split();
+
         eprintln!("live sync active. (Ctrl-C to stop)\n");
 
-        let mut interval = tokio::time::interval(
-            std::time::Duration::from_secs(interval_secs)
-        );
+        // Spawn periodic announcements on a separate task.
+        let announce_sender = sender.clone();
+        tokio::spawn(async move {
+            let mut timer = tokio::time::interval(std::time::Duration::from_secs(10));
+            loop {
+                timer.tick().await;
+                for name in ANNOUNCE_BRANCHES {
+                    let msg = format!("BRANCH_UPDATE {name}");
+                    if let Err(e) = announce_sender.broadcast(msg.into_bytes().into()).await {
+                        eprintln!("  announce error: {e}");
+                        return;
+                    }
+                }
+                eprintln!("  (announced branches)");
+            }
+        });
 
         loop {
             tokio::select! {
@@ -466,20 +495,42 @@ fn run_live(
                     eprintln!("\nshutting down...");
                     break;
                 }
-                _ = interval.tick() => {
-                    for peer_key in &peer_keys {
-                        for branch_name in &branches {
-                            match pull_branch_from_peer(
-                                &endpoint,
-                                &pile_path,
-                                &signing_key_path,
-                                (*peer_key).into(),
-                                branch_name,
-                            ).await {
-                                Ok(true) => eprintln!("  [{peer_key}] '{branch_name}' updated"),
-                                Ok(false) => {} // up to date, silent
-                                Err(e) => eprintln!("  [{peer_key}] '{branch_name}' error: {e}"),
+                event = receiver.try_next() => {
+                    match event {
+                        Ok(Some(GossipEvent::NeighborUp(peer))) => {
+                            eprintln!("  peer joined: {}", peer.fmt_short());
+                        }
+                        Ok(Some(GossipEvent::NeighborDown(peer))) => {
+                            eprintln!("  peer left: {}", peer.fmt_short());
+                        }
+                        Ok(Some(GossipEvent::Received(msg))) => {
+                            let text = String::from_utf8_lossy(&msg.content);
+                            let from: EndpointId = msg.delivered_from.into();
+                            if let Some(branch_name) = text.strip_prefix("BRANCH_UPDATE ") {
+                                let branch_name = branch_name.trim();
+                                eprintln!("  [{}] branch '{}' announced", from.fmt_short(), branch_name);
+                                match pull_branch_from_peer(
+                                    &endpoint,
+                                    &pile_path,
+                                    &signing_key_path,
+                                    from,
+                                    branch_name,
+                                ).await {
+                                    Ok(true) => eprintln!("  [{}] '{}' synced", from.fmt_short(), branch_name),
+                                    Ok(false) => {} // up to date, silent
+                                    Err(e) => eprintln!("  [{}] '{}' error: {e}", from.fmt_short(), branch_name),
+                                }
                             }
+                        }
+                        Ok(Some(GossipEvent::Lagged)) => {
+                            eprintln!("  warning: gossip lagged");
+                        }
+                        Ok(None) => {
+                            eprintln!("gossip stream ended");
+                            break;
+                        }
+                        Err(e) => {
+                            eprintln!("gossip error: {e}");
                         }
                     }
                 }
