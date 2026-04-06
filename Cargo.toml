@@ -42,6 +42,8 @@ hifitime = "4"
 anybytes = { version = "0.20.2", features = ["zerocopy"] }
 iroh = { path = "../iroh/iroh" }
 iroh-base = { path = "../iroh/iroh-base" }
+iroh-gossip = { path = "../iroh-gossip", features = ["net"] }
+blake3 = "1.8"
 tokio = { version = "1", features = ["full"] }
 
 [patch.crates-io]
@@ -49,6 +51,9 @@ tokio = { version = "1", features = ["full"] }
 noq = { git = "https://github.com/n0-computer/noq", branch = "main" }
 noq-udp = { git = "https://github.com/n0-computer/noq", branch = "main" }
 noq-proto = { git = "https://github.com/n0-computer/noq", branch = "main" }
+# iroh-gossip expects published iroh 0.97; patch to our local main.
+iroh = { path = "../iroh/iroh" }
+iroh-base = { path = "../iroh/iroh-base" }
 
 [dev-dependencies]
 assert_cmd = "2.1.2"

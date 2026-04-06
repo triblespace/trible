@@ -21,7 +21,7 @@ use clap::Parser;
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::endpoint::{Connection, presets};
 use iroh::Endpoint;
-use iroh_base::SecretKey;
+use iroh_base::{EndpointId, SecretKey};
 use triblespace_core::blob::ToBlob;
 use triblespace_core::blob::TryFromBlob;
 use triblespace_core::blob::Blob;
@@ -75,6 +75,30 @@ pub enum Command {
         #[arg(long)]
         signing_key: Option<PathBuf>,
     },
+    /// Live sync: serve pull requests + periodically pull from peers.
+    ///
+    /// Combines `up` (serve) with periodic polling of known peers.
+    /// Every `--interval` seconds, pulls the specified branches from
+    /// each peer.
+    Live {
+        /// Path to the pile file
+        pile: PathBuf,
+        /// Peer node IDs to sync with (comma-separated).
+        #[arg(long, value_delimiter = ',')]
+        peers: Vec<String>,
+        /// Branches to sync.
+        #[arg(long, default_values_t = vec![
+            "compass".to_string(), "wiki".to_string(),
+            "local-messages".to_string(), "relations".to_string(),
+        ])]
+        branch: Vec<String>,
+        /// Poll interval in seconds.
+        #[arg(long, default_value = "10")]
+        interval: u64,
+        /// Signing key file
+        #[arg(long)]
+        signing_key: Option<PathBuf>,
+    },
 }
 
 pub fn run(cmd: Command) -> Result<()> {
@@ -83,6 +107,9 @@ pub fn run(cmd: Command) -> Result<()> {
         Command::Up { pile, signing_key } => run_up(pile, signing_key),
         Command::Pull { pile, remote, branch, signing_key } => {
             run_pull(pile, remote, branch, signing_key)
+        }
+        Command::Live { pile, peers, branch, interval, signing_key } => {
+            run_live(pile, peers, branch, interval, signing_key)
         }
     }
 }
@@ -387,4 +414,151 @@ async fn recv_exact(recv: &mut iroh::endpoint::RecvStream, len: usize) -> Result
 
 fn iroh_secret_from_signing_key(key: &SigningKey) -> SecretKey {
     SecretKey::from(key.to_bytes())
+}
+
+// ── Live polling sync ────────────────────────────────────────────────
+
+fn run_live(
+    pile_path: PathBuf,
+    peer_strs: Vec<String>,
+    branches: Vec<String>,
+    interval_secs: u64,
+    signing_key_path: Option<PathBuf>,
+) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;
+    rt.block_on(async {
+        let signing_key = load_or_create_pile_key(&signing_key_path, &pile_path)?;
+        let iroh_secret = iroh_secret_from_signing_key(&signing_key);
+        let public = iroh_secret.public();
+
+        let peer_keys: Vec<iroh_base::PublicKey> = peer_strs.iter()
+            .filter_map(|s| s.parse().ok())
+            .collect();
+
+        let endpoint = Endpoint::builder(presets::N0)
+            .secret_key(iroh_secret)
+            .bind()
+            .await
+            .map_err(|e| anyhow!("bind: {e}"))?;
+
+        let handler = PileSyncHandler {
+            pile_path: pile_path.clone(),
+            signing_key: signing_key.clone(),
+        };
+
+        let router = Router::builder(endpoint.clone())
+            .accept(PILE_SYNC_ALPN, handler)
+            .spawn();
+
+        eprintln!("node: {public}");
+        eprintln!("syncing {} branch(es) with {} peer(s) every {interval_secs}s",
+            branches.len(), peer_keys.len());
+        eprintln!("branches: {}", branches.join(", "));
+        eprintln!("live sync active. (Ctrl-C to stop)\n");
+
+        let mut interval = tokio::time::interval(
+            std::time::Duration::from_secs(interval_secs)
+        );
+
+        loop {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    eprintln!("\nshutting down...");
+                    break;
+                }
+                _ = interval.tick() => {
+                    for peer_key in &peer_keys {
+                        for branch_name in &branches {
+                            match pull_branch_from_peer(
+                                &endpoint,
+                                &pile_path,
+                                &signing_key_path,
+                                (*peer_key).into(),
+                                branch_name,
+                            ).await {
+                                Ok(true) => eprintln!("  [{peer_key}] '{branch_name}' updated"),
+                                Ok(false) => {} // up to date, silent
+                                Err(e) => eprintln!("  [{peer_key}] '{branch_name}' error: {e}"),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        router.shutdown().await.map_err(|e| anyhow!("shutdown: {e}"))?;
+        Ok(())
+    })
+}
+
+/// Pull a single branch from a peer. Returns true if new data was received.
+async fn pull_branch_from_peer(
+    endpoint: &Endpoint,
+    pile_path: &PathBuf,
+    signing_key_path: &Option<PathBuf>,
+    peer: EndpointId,
+    branch_name: &str,
+) -> Result<bool> {
+    let conn = endpoint.connect(peer, PILE_SYNC_ALPN).await
+        .map_err(|e| anyhow!("connect: {e}"))?;
+
+    let (mut send, mut recv) = conn.open_bi().await
+        .map_err(|e| anyhow!("open_bi: {e}"))?;
+
+    let request = format!("PULL_BRANCH {branch_name}\n");
+    send.write_all(request.as_bytes()).await
+        .map_err(|e| anyhow!("write: {e}"))?;
+    send.finish().map_err(|e| anyhow!("finish: {e}"))?;
+
+    let header = recv_line(&mut recv).await?;
+    let mut changed = false;
+
+    if let Some(rest) = header.strip_prefix("SNAPSHOT ") {
+        let parts: Vec<&str> = rest.trim().splitn(2, ' ').collect();
+        let trible_len: usize = parts[0].parse()
+            .map_err(|e| anyhow!("bad trible length: {e}"))?;
+        let n_blobs: usize = if parts.len() > 1 { parts[1].parse().unwrap_or(0) } else { 0 };
+
+        let trible_data = recv_exact(&mut recv, trible_len).await?;
+
+        let pile = open_pile(pile_path)?;
+        let signing_key = load_or_create_pile_key(signing_key_path, pile_path)?;
+        let mut repo = Repository::new(pile, signing_key, TribleSet::new())
+            .map_err(|e| anyhow!("repo: {e:?}"))?;
+
+        for _ in 0..n_blobs {
+            let blob_header = recv_line(&mut recv).await?;
+            if let Some(rest) = blob_header.strip_prefix("BLOB ") {
+                let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+                if parts.len() == 2 {
+                    let blob_len: usize = parts[1].parse().unwrap_or(0);
+                    let blob_data = recv_exact(&mut recv, blob_len).await?;
+                    let bytes: Bytes = blob_data.into();
+                    let _ = repo.storage_mut().put::<UnknownBlob, Bytes>(bytes);
+                }
+            }
+        }
+
+        let branch_id = repo.ensure_branch(branch_name, None)
+            .map_err(|e| anyhow!("ensure branch: {e:?}"))?;
+
+        let blob: Blob<SimpleArchive> = Blob::new(trible_data.into());
+        let remote_facts: TribleSet = blob.try_from_blob()
+            .map_err(|e| anyhow!("bad archive: {e}"))?;
+
+        let mut ws = repo.pull(branch_id).map_err(|e| anyhow!("pull: {e:?}"))?;
+        let local_facts = ws.checkout(..).map_err(|e| anyhow!("checkout: {e:?}"))?.into_facts();
+        let delta = remote_facts.difference(&local_facts);
+
+        if !delta.is_empty() {
+            ws.commit(delta.clone(), "sync: live pull");
+            repo.try_push(&mut ws).map_err(|e| anyhow!("push: {e:?}"))?;
+            changed = true;
+        }
+
+        let _ = repo.close();
+    }
+
+    conn.close(0u32.into(), b"done");
+    Ok(changed)
 }
