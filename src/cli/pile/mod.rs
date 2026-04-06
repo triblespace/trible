@@ -8,6 +8,7 @@ pub mod branch;
 mod diagnose;
 mod merge;
 mod migrate;
+pub mod net;
 mod signing;
 mod squash;
 
@@ -56,6 +57,11 @@ pub enum PileCommand {
         #[command(subcommand)]
         cmd: migrate::Command,
     },
+    /// Distributed pile sync over iroh (p2p QUIC connections).
+    Net {
+        #[command(subcommand)]
+        cmd: net::Command,
+    },
     /// Squash all branch histories into single commits in a new pile.
     ///
     /// For each branch, the full accumulated content and metadata are
@@ -102,6 +108,7 @@ pub fn run(cmd: PileCommand) -> Result<()> {
             pile.close().map_err(|e| anyhow::anyhow!("{e:?}"))?;
             Ok(())
         }
+        PileCommand::Net { cmd } => net::run(cmd),
         PileCommand::Diagnose { cmd } => diagnose::run(cmd),
         PileCommand::Migrate { pile, cmd } => migrate::run(pile, cmd),
         PileCommand::Squash {
