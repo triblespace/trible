@@ -308,46 +308,74 @@ async fn sync_branch(
         _ => return Err(anyhow!("unexpected response type: {rsp}")),
     };
 
-    // BFS over the CAS graph: fetch missing blobs, scan for references, repeat.
+    // BFS over the CAS graph using SYNC batches.
+    // For each blob: scan it for references, tell the server what we have,
+    // receive only the blobs we're missing. One round-trip per depth level.
     let mut pile = open_pile(pile_path)?;
-    let mut queue: VecDeque<RawHash> = VecDeque::new();
-    let mut visited: HashSet<RawHash> = HashSet::new();
     let mut fetched = 0usize;
     let mut fetched_bytes = 0usize;
 
-    queue.push_back(remote_head);
-
-    while let Some(hash) = queue.pop_front() {
-        if !visited.insert(hash) { continue; }
-        if has_blob(&mut pile, &hash) { continue; }
-
-        send_req_get_blob(&mut send, &hash).await?;
+    // Start by fetching the head blob itself.
+    if !has_blob(&mut pile, &remote_head) {
+        send_req_get_blob(&mut send, &remote_head).await?;
         let rsp = recv_u8(&mut recv).await?;
+        if rsp == RSP_BLOB {
+            let (_hash, data) = recv_blob_data(&mut recv).await?;
+            fetched += 1;
+            fetched_bytes += data.len();
+            let bytes: Bytes = data.into();
+            let _: Value<Handle<Blake3, UnknownBlob>> = pile.put::<UnknownBlob, Bytes>(bytes)
+                .map_err(|e| anyhow!("put: {e:?}"))?;
+        }
+    }
 
-        match rsp {
-            RSP_BLOB => {
-                let (_hash, data) = recv_blob_data(&mut recv).await?;
+    // BFS: process blobs level by level using SYNC.
+    let mut current_level = vec![remote_head];
+    let mut seen: HashSet<RawHash> = HashSet::new();
+    seen.insert(remote_head);
 
-                // Conservative reference scan: every 32-byte chunk is a candidate.
+    while !current_level.is_empty() {
+        let mut next_level: Vec<RawHash> = Vec::new();
+
+        for parent_hash in &current_level {
+            // Scan the parent blob locally for 32-byte candidates.
+            // Separate into: known blobs (HAVE) and unknown candidates.
+            let mut have: Vec<RawHash> = Vec::new();
+            if let Some(data) = get_blob(&mut pile, parent_hash) {
                 for chunk in data.chunks(VALUE_LEN) {
                     if chunk.len() == VALUE_LEN {
                         let mut candidate = [0u8; 32];
                         candidate.copy_from_slice(chunk);
-                        if !visited.contains(&candidate) {
-                            queue.push_back(candidate);
+                        if seen.insert(candidate) {
+                            if has_blob(&mut pile, &candidate) {
+                                have.push(candidate);
+                            }
                         }
                     }
                 }
-
-                fetched += 1;
-                fetched_bytes += data.len();
-                let bytes: Bytes = data.into();
-                let _: Value<Handle<Blake3, UnknownBlob>> = pile.put::<UnknownBlob, Bytes>(bytes)
-                    .map_err(|e| anyhow!("put: {e:?}"))?;
             }
-            RSP_MISSING => {} // false positive, skip
-            _ => return Err(anyhow!("unexpected response: {rsp}")),
+
+            // SYNC: send what we have, receive what we're missing.
+            send_req_sync(&mut send, parent_hash, &have).await?;
+            loop {
+                let rsp = recv_u8(&mut recv).await?;
+                match rsp {
+                    RSP_BLOB => {
+                        let (hash, data) = recv_blob_data(&mut recv).await?;
+                        fetched += 1;
+                        fetched_bytes += data.len();
+                        let bytes: Bytes = data.into();
+                        let _: Value<Handle<Blake3, UnknownBlob>> = pile.put::<UnknownBlob, Bytes>(bytes)
+                            .map_err(|e| anyhow!("put: {e:?}"))?;
+                        next_level.push(hash);
+                    }
+                    RSP_END_SYNC => break,
+                    _ => return Err(anyhow!("unexpected sync response: {rsp}")),
+                }
+            }
         }
+
+        current_level = next_level;
     }
 
     // All blobs are local. CAS merge the remote commit into our branch.
@@ -426,7 +454,31 @@ impl ProtocolHandler for BlobServer {
                             None => send_rsp_missing(&mut send).await?,
                         }
                     }
-                    _ => break, // Unknown message type
+                    REQ_SYNC => {
+                        let parent_hash = recv_hash(&mut recv).await?;
+                        let have_count = recv_u32_be(&mut recv).await? as usize;
+                        let mut have_set: HashSet<RawHash> = HashSet::with_capacity(have_count);
+                        for _ in 0..have_count {
+                            have_set.insert(recv_hash(&mut recv).await?);
+                        }
+                        // Scan the parent blob for references, send ones
+                        // that are real blobs and NOT in the client's have set.
+                        if let Some(parent_data) = get_blob(&mut pile, &parent_hash) {
+                            for chunk in parent_data.chunks(VALUE_LEN) {
+                                if chunk.len() == VALUE_LEN {
+                                    let mut candidate = [0u8; 32];
+                                    candidate.copy_from_slice(chunk);
+                                    if !have_set.contains(&candidate) {
+                                        if let Some(data) = get_blob(&mut pile, &candidate) {
+                                            send_rsp_blob(&mut send, &candidate, &data).await?;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        send_rsp_end_sync(&mut send).await?;
+                    }
+                    _ => break,
                 }
             }
 
@@ -495,11 +547,13 @@ fn branch_head_raw(pile_path: &PathBuf, name: &str) -> Option<RawHash> {
 const REQ_DONE: u8 = 0x00;
 const REQ_HEAD: u8 = 0x01;
 const REQ_GET_BLOB: u8 = 0x02;
+const REQ_SYNC: u8 = 0x03;  // SYNC <parent_hash> <have_count> <have_hashes...>
 
 const RSP_HEAD_OK: u8 = 0x01;
 const RSP_BLOB: u8 = 0x02;
 const RSP_MISSING: u8 = 0x03;
 const RSP_NONE: u8 = 0x04;
+const RSP_END_SYNC: u8 = 0x05;
 
 type RawHash = [u8; 32];
 
@@ -535,6 +589,20 @@ async fn send_rsp_blob(send: &mut iroh::endpoint::SendStream, hash: &RawHash, da
     send.write_all(hash).await.map_err(|e| anyhow!("send: {e}"))?;
     send.write_all(&(data.len() as u32).to_be_bytes()).await.map_err(|e| anyhow!("send: {e}"))?;
     send.write_all(data).await.map_err(|e| anyhow!("send: {e}"))
+}
+
+async fn send_req_sync(send: &mut iroh::endpoint::SendStream, parent: &RawHash, have: &[RawHash]) -> Result<()> {
+    send.write_all(&[REQ_SYNC]).await.map_err(|e| anyhow!("send: {e}"))?;
+    send.write_all(parent).await.map_err(|e| anyhow!("send: {e}"))?;
+    send.write_all(&(have.len() as u32).to_be_bytes()).await.map_err(|e| anyhow!("send: {e}"))?;
+    for h in have {
+        send.write_all(h).await.map_err(|e| anyhow!("send: {e}"))?;
+    }
+    Ok(())
+}
+
+async fn send_rsp_end_sync(send: &mut iroh::endpoint::SendStream) -> Result<()> {
+    send.write_all(&[RSP_END_SYNC]).await.map_err(|e| anyhow!("send: {e}"))
 }
 
 async fn send_rsp_missing(send: &mut iroh::endpoint::SendStream) -> Result<()> {
