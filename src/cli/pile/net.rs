@@ -297,15 +297,62 @@ async fn sync_branch(
     signing_key: &SigningKey,
     branch_name: &str,
 ) -> Result<String> {
-    // Ask for remote head.
+    // List remote branches, then GET_BLOB each head to read the name.
     let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("open_bi: {e}"))?;
-    send_req_head(&mut send, branch_name).await?;
 
-    let rsp = recv_u8(&mut recv).await?;
-    let remote_head: RawHash = match rsp {
-        RSP_HEAD_OK => recv_hash(&mut recv).await?,
-        RSP_NONE => return Ok(format!("'{branch_name}': remote has no head")),
-        _ => return Err(anyhow!("unexpected response type: {rsp}")),
+    send_req_list(&mut send).await?;
+    let mut remote_branches: Vec<([u8; 16], RawHash)> = Vec::new();
+    loop {
+        let rsp = recv_u8(&mut recv).await?;
+        match rsp {
+            RSP_LIST_ENTRY => {
+                let id = recv_branch_id(&mut recv).await?;
+                let head = recv_hash(&mut recv).await?;
+                remote_branches.push((id, head));
+            }
+            RSP_END_LIST => break,
+            _ => return Err(anyhow!("unexpected list response: {rsp}")),
+        }
+    }
+
+    // Fetch each branch's metadata blob to find the name.
+    let mut remote_head: Option<RawHash> = None;
+    for (_id, head) in &remote_branches {
+        send_req_get_blob(&mut send, head).await?;
+        let rsp = recv_u8(&mut recv).await?;
+        if rsp == RSP_BLOB {
+            let (_hash, data) = recv_blob_data(&mut recv).await?;
+            // Parse the metadata blob as a TribleSet, look for metadata::name.
+            let blob: Blob<SimpleArchive> = Blob::new(data.clone().into());
+            if let Ok(meta) = TribleSet::try_from_blob(blob) {
+                use triblespace_core::macros::{find, pattern};
+                // Check if any entity in the metadata has a name matching our branch.
+                for name_handle in find!(
+                    h: Value<Handle<Blake3, triblespace_core::blob::schemas::longstring::LongString>>,
+                    pattern!(&meta, [{ _?e @ triblespace_core::metadata::name: ?h }])
+                ) {
+                    // We need to resolve the name handle to a string.
+                    // The blob might be in the data we just received or needs to be fetched.
+                    // For now, check if it matches by fetching it.
+                    send_req_get_blob(&mut send, &name_handle.raw).await?;
+                    let rsp2 = recv_u8(&mut recv).await?;
+                    if rsp2 == RSP_BLOB {
+                        let (_h2, name_data) = recv_blob_data(&mut recv).await?;
+                        if let Ok(name) = std::str::from_utf8(&name_data) {
+                            if name == branch_name {
+                                remote_head = Some(*head);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if remote_head.is_some() { break; }
+        }
+    }
+    let remote_head = match remote_head {
+        Some(h) => h,
+        None => return Ok(format!("'{branch_name}': not found on remote")),
     };
 
     // BFS over the CAS graph using SYNC batches.
@@ -440,12 +487,17 @@ impl ProtocolHandler for BlobServer {
 
                 match msg_type {
                     REQ_DONE => break,
-                    REQ_HEAD => {
-                        let name = recv_branch_name(&mut recv).await?;
-                        match branch_head_raw(&pile_path, &name) {
-                            Some(hash) => send_rsp_head_ok(&mut send, &hash).await?,
-                            None => send_rsp_none(&mut send).await?,
+                    REQ_LIST => {
+                        let iter = pile.branches()
+                            .map_err(|e| anyhow!("branches: {e:?}"))?;
+                        for branch_result in iter {
+                            let id = branch_result.map_err(|e| anyhow!("iter: {e:?}"))?;
+                            if let Ok(Some(head)) = pile.head(id) {
+                                let id_bytes: [u8; 16] = id.into();
+                                send_rsp_list_entry(&mut send, &id_bytes, &head.raw).await?;
+                            }
                         }
+                        send_rsp_end_list(&mut send).await?;
                     }
                     REQ_GET_BLOB => {
                         let hash = recv_hash(&mut recv).await?;
@@ -545,29 +597,36 @@ fn branch_head_raw(pile_path: &PathBuf, name: &str) -> Option<RawHash> {
 //   0x04  NONE
 
 const REQ_DONE: u8 = 0x00;
-const REQ_HEAD: u8 = 0x01;
+const REQ_LIST: u8 = 0x01;    // → LIST_ENTRY* END_LIST
 const REQ_GET_BLOB: u8 = 0x02;
-const REQ_SYNC: u8 = 0x03;  // SYNC <parent_hash> <have_count> <have_hashes...>
+const REQ_SYNC: u8 = 0x03;    // <parent:32> <have_count:4> <hashes...> → BLOB* END_SYNC
 
-const RSP_HEAD_OK: u8 = 0x01;
-const RSP_BLOB: u8 = 0x02;
-const RSP_MISSING: u8 = 0x03;
-const RSP_NONE: u8 = 0x04;
+const RSP_LIST_ENTRY: u8 = 0x01;  // <branch_id:16> <head:32>
+const RSP_END_LIST: u8 = 0x02;
+const RSP_BLOB: u8 = 0x03;
+const RSP_MISSING: u8 = 0x04;
 const RSP_END_SYNC: u8 = 0x05;
 
 type RawHash = [u8; 32];
 
-async fn send_req_head(send: &mut iroh::endpoint::SendStream, name: &str) -> Result<()> {
-    let name_bytes = name.as_bytes();
-    send.write_all(&[REQ_HEAD, name_bytes.len() as u8]).await.map_err(|e| anyhow!("send: {e}"))?;
-    send.write_all(name_bytes).await.map_err(|e| anyhow!("send: {e}"))
+async fn send_req_list(send: &mut iroh::endpoint::SendStream) -> Result<()> {
+    send.write_all(&[REQ_LIST]).await.map_err(|e| anyhow!("send: {e}"))
 }
 
-async fn recv_branch_name(recv: &mut iroh::endpoint::RecvStream) -> Result<String> {
-    let len = recv_u8(recv).await? as usize;
-    let mut buf = vec![0u8; len];
+async fn send_rsp_list_entry(send: &mut iroh::endpoint::SendStream, branch_id: &[u8; 16], head: &RawHash) -> Result<()> {
+    send.write_all(&[RSP_LIST_ENTRY]).await.map_err(|e| anyhow!("send: {e}"))?;
+    send.write_all(branch_id).await.map_err(|e| anyhow!("send: {e}"))?;
+    send.write_all(head).await.map_err(|e| anyhow!("send: {e}"))
+}
+
+async fn send_rsp_end_list(send: &mut iroh::endpoint::SendStream) -> Result<()> {
+    send.write_all(&[RSP_END_LIST]).await.map_err(|e| anyhow!("send: {e}"))
+}
+
+async fn recv_branch_id(recv: &mut iroh::endpoint::RecvStream) -> Result<[u8; 16]> {
+    let mut buf = [0u8; 16];
     recv.read_exact(&mut buf).await.map_err(|e| anyhow!("recv: {e}"))?;
-    String::from_utf8(buf).map_err(|e| anyhow!("bad branch name: {e}"))
+    Ok(buf)
 }
 
 async fn send_req_get_blob(send: &mut iroh::endpoint::SendStream, hash: &RawHash) -> Result<()> {
@@ -579,10 +638,6 @@ async fn send_req_done(send: &mut iroh::endpoint::SendStream) -> Result<()> {
     send.write_all(&[REQ_DONE]).await.map_err(|e| anyhow!("send: {e}"))
 }
 
-async fn send_rsp_head_ok(send: &mut iroh::endpoint::SendStream, hash: &RawHash) -> Result<()> {
-    send.write_all(&[RSP_HEAD_OK]).await.map_err(|e| anyhow!("send: {e}"))?;
-    send.write_all(hash).await.map_err(|e| anyhow!("send: {e}"))
-}
 
 async fn send_rsp_blob(send: &mut iroh::endpoint::SendStream, hash: &RawHash, data: &[u8]) -> Result<()> {
     send.write_all(&[RSP_BLOB]).await.map_err(|e| anyhow!("send: {e}"))?;
@@ -609,9 +664,6 @@ async fn send_rsp_missing(send: &mut iroh::endpoint::SendStream) -> Result<()> {
     send.write_all(&[RSP_MISSING]).await.map_err(|e| anyhow!("send: {e}"))
 }
 
-async fn send_rsp_none(send: &mut iroh::endpoint::SendStream) -> Result<()> {
-    send.write_all(&[RSP_NONE]).await.map_err(|e| anyhow!("send: {e}"))
-}
 
 async fn recv_u8(recv: &mut iroh::endpoint::RecvStream) -> Result<u8> {
     let mut buf = [0u8; 1];
