@@ -1,16 +1,17 @@
 //! Distributed pile sync over iroh.
 //!
 //! The sync protocol is blob-centric: a pile is a set of content-addressed
-//! blobs, and sync is set reconciliation of blob hashes.  The wire protocol
-//! has two operations:
+//! blobs, and sync is set reconciliation.  The server has two operations:
 //!
 //! ```text
-//! GET_BLOB <hash-hex>        → BLOB <hash> <len>\n<data>  (or MISSING <hash>)
-//! HEAD <branch-name>         → HEAD <branch-name> <hash-hex>  (or NONE <branch-name>)
+//! HEAD <branch>       → HEAD <branch> <hash>  (or NONE)
+//! GET_BLOB <hash>     → BLOB <hash> <len>\n<data>  (or MISSING)
 //! ```
 //!
-//! Everything else — commit walking, reference following, branch merging —
-//! is client-side logic using CAS properties already in triblespace.
+//! The client drives a BFS over the CAS graph: fetch a blob, scan it for
+//! 32-byte references, check which ones are local, fetch the missing ones.
+//! The walk stops when all referenced blobs are already local — making it
+//! inherently incremental without understanding commits or branches.
 
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
@@ -306,7 +307,9 @@ async fn sync_branch(
         return Err(anyhow!("unexpected response: {response}"));
     };
 
-    // BFS: fetch all missing blobs in the CAS graph.
+    // BFS over the CAS graph: fetch missing blobs, scan for references, repeat.
+    // Stops when all referenced blobs are already local — this is inherently
+    // incremental without needing to understand commits or branches.
     let mut pile = open_pile(pile_path)?;
     let mut queue: VecDeque<String> = VecDeque::new();
     let mut visited: HashSet<String> = HashSet::new();
@@ -317,22 +320,19 @@ async fn sync_branch(
 
     while let Some(hash_hex) = queue.pop_front() {
         if !visited.insert(hash_hex.clone()) { continue; }
-
-        // Check local.
         if has_blob_hex(&mut pile, &hash_hex) { continue; }
 
-        // Fetch from remote.
+        // Fetch the blob.
         send_line(&mut send, &format!("GET_BLOB {hash_hex}")).await?;
-        let blob_response = recv_line(&mut recv).await?;
+        let response = recv_line(&mut recv).await?;
 
-        if let Some(rest) = blob_response.strip_prefix("BLOB ") {
+        if let Some(rest) = response.strip_prefix("BLOB ") {
             let parts: Vec<&str> = rest.splitn(2, ' ').collect();
             if parts.len() == 2 {
                 let len: usize = parts[1].parse().map_err(|e| anyhow!("bad len: {e}"))?;
                 let data = recv_exact(&mut recv, len).await?;
 
-                // Scan the blob for potential sub-references (32-byte hash candidates).
-                // This is the conservative walk: every 32-byte aligned chunk is a candidate.
+                // Conservative reference scan: every 32-byte chunk is a candidate.
                 for chunk in data.chunks(VALUE_LEN) {
                     if chunk.len() == VALUE_LEN {
                         let candidate = hex::encode(chunk);
@@ -342,7 +342,6 @@ async fn sync_branch(
                     }
                 }
 
-                // Store in pile.
                 let bytes: Bytes = data.into();
                 let _: Value<Handle<Blake3, UnknownBlob>> = pile.put::<UnknownBlob, Bytes>(bytes)
                     .map_err(|e| anyhow!("put blob: {e:?}"))?;
@@ -350,7 +349,7 @@ async fn sync_branch(
                 fetched_bytes += len;
             }
         }
-        // MISSING: just skip — it's a false positive from the conservative scan.
+        // MISSING → false positive from conservative scan, skip.
     }
 
     // Now all blobs are local. Read the remote's data from the commit chain.
