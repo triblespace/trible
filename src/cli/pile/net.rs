@@ -211,7 +211,7 @@ fn run_live(pile_path: PathBuf, topic_name: String, peer_strs: Vec<String>, sk: 
                 _ = tokio::signal::ctrl_c() => { break; }
                 _ = timer.tick() => {
                     for name in ANNOUNCE_BRANCHES {
-                        let head = branch_head_hash(&pile_path, name);
+                        let head = branch_head_raw(&pile_path, name).map(|h| hex::encode(h));
                         let msg = format!("HEAD {name} {} {public}", head.unwrap_or_else(|| "NONE".into()));
                         let _ = topic.broadcast(msg.into_bytes().into()).await;
                     }
@@ -221,7 +221,7 @@ fn run_live(pile_path: PathBuf, topic_name: String, peer_strs: Vec<String>, sk: 
                         Ok(Some(GossipEvent::NeighborUp(peer))) => {
                             eprintln!("  peer joined: {}", peer.fmt_short());
                             for name in ANNOUNCE_BRANCHES {
-                                let head = branch_head_hash(&pile_path, name);
+                                let head = branch_head_raw(&pile_path, name).map(|h| hex::encode(h));
                                 let msg = format!("HEAD {name} {} {public}", head.unwrap_or_else(|| "NONE".into()));
                                 let _ = topic.broadcast(msg.into_bytes().into()).await;
                             }
@@ -243,10 +243,16 @@ fn run_live(pile_path: PathBuf, topic_name: String, peer_strs: Vec<String>, sk: 
                                     if remote_head == "NONE" { continue; }
 
                                     // Check: do we already have this blob locally?
-                                    let already_have = if let Ok(mut pile) = open_pile(&pile_path) {
-                                        let has = has_blob_hex(&mut pile, remote_head);
-                                        let _ = pile.close();
-                                        has
+                                    let already_have = if let Ok(hash_bytes) = hex::decode(remote_head) {
+                                        if hash_bytes.len() == 32 {
+                                            let mut h = [0u8; 32];
+                                            h.copy_from_slice(&hash_bytes);
+                                            if let Ok(mut pile) = open_pile(&pile_path) {
+                                                let r = has_blob(&mut pile, &h);
+                                                let _ = pile.close();
+                                                r
+                                            } else { false }
+                                        } else { false }
                                     } else { false };
 
                                     if already_have { continue; } // up to date
@@ -293,71 +299,59 @@ async fn sync_branch(
 ) -> Result<String> {
     // Ask for remote head.
     let (mut send, mut recv) = conn.open_bi().await.map_err(|e| anyhow!("open_bi: {e}"))?;
-    send_line(&mut send, &format!("HEAD {branch_name}")).await?;
+    send_req_head(&mut send, branch_name).await?;
 
-    let response = recv_line(&mut recv).await?;
-    let remote_head_hex = if let Some(rest) = response.strip_prefix("HEAD ") {
-        let parts: Vec<&str> = rest.split_whitespace().collect();
-        if parts.len() >= 2 && parts[1] != "NONE" {
-            parts[1].to_string()
-        } else {
-            return Ok(format!("'{branch_name}': remote has no head"));
-        }
-    } else {
-        return Err(anyhow!("unexpected response: {response}"));
+    let rsp = recv_u8(&mut recv).await?;
+    let remote_head: RawHash = match rsp {
+        RSP_HEAD_OK => recv_hash(&mut recv).await?,
+        RSP_NONE => return Ok(format!("'{branch_name}': remote has no head")),
+        _ => return Err(anyhow!("unexpected response type: {rsp}")),
     };
 
     // BFS over the CAS graph: fetch missing blobs, scan for references, repeat.
-    // Stops when all referenced blobs are already local — this is inherently
-    // incremental without needing to understand commits or branches.
     let mut pile = open_pile(pile_path)?;
-    let mut queue: VecDeque<String> = VecDeque::new();
-    let mut visited: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<RawHash> = VecDeque::new();
+    let mut visited: HashSet<RawHash> = HashSet::new();
     let mut fetched = 0usize;
     let mut fetched_bytes = 0usize;
 
-    queue.push_back(remote_head_hex.clone());
+    queue.push_back(remote_head);
 
-    while let Some(hash_hex) = queue.pop_front() {
-        if !visited.insert(hash_hex.clone()) { continue; }
-        if has_blob_hex(&mut pile, &hash_hex) { continue; }
+    while let Some(hash) = queue.pop_front() {
+        if !visited.insert(hash) { continue; }
+        if has_blob(&mut pile, &hash) { continue; }
 
-        // Fetch the blob.
-        send_line(&mut send, &format!("GET_BLOB {hash_hex}")).await?;
-        let response = recv_line(&mut recv).await?;
+        send_req_get_blob(&mut send, &hash).await?;
+        let rsp = recv_u8(&mut recv).await?;
 
-        if let Some(rest) = response.strip_prefix("BLOB ") {
-            let parts: Vec<&str> = rest.splitn(2, ' ').collect();
-            if parts.len() == 2 {
-                let len: usize = parts[1].parse().map_err(|e| anyhow!("bad len: {e}"))?;
-                let data = recv_exact(&mut recv, len).await?;
+        match rsp {
+            RSP_BLOB => {
+                let (_hash, data) = recv_blob_data(&mut recv).await?;
 
                 // Conservative reference scan: every 32-byte chunk is a candidate.
                 for chunk in data.chunks(VALUE_LEN) {
                     if chunk.len() == VALUE_LEN {
-                        let candidate = hex::encode(chunk);
+                        let mut candidate = [0u8; 32];
+                        candidate.copy_from_slice(chunk);
                         if !visited.contains(&candidate) {
                             queue.push_back(candidate);
                         }
                     }
                 }
 
+                fetched += 1;
+                fetched_bytes += data.len();
                 let bytes: Bytes = data.into();
                 let _: Value<Handle<Blake3, UnknownBlob>> = pile.put::<UnknownBlob, Bytes>(bytes)
-                    .map_err(|e| anyhow!("put blob: {e:?}"))?;
-                fetched += 1;
-                fetched_bytes += len;
+                    .map_err(|e| anyhow!("put: {e:?}"))?;
             }
+            RSP_MISSING => {} // false positive, skip
+            _ => return Err(anyhow!("unexpected response: {rsp}")),
         }
-        // MISSING → false positive from conservative scan, skip.
     }
 
-    // All blobs are local. Adopt the remote's commit into our branch
-    // via merge_commit (CAS). No checkout, no diff — just a pointer merge.
-    let remote_head_bytes = hex::decode(&remote_head_hex).map_err(|e| anyhow!("hex: {e}"))?;
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&remote_head_bytes);
-    let remote_branch_meta = Value::<Handle<Blake3, SimpleArchive>>::new(arr);
+    // All blobs are local. CAS merge the remote commit into our branch.
+    let remote_branch_meta = Value::<Handle<Blake3, SimpleArchive>>::new(remote_head);
 
     // Read the remote's branch meta to find the actual commit handle.
     let reader = BlobStore::<Blake3>::reader(&mut pile).map_err(|e| anyhow!("reader: {e:?}"))?;
@@ -385,7 +379,7 @@ async fn sync_branch(
 
     let _ = repo.close();
 
-    send_line(&mut send, "DONE").await?;
+    send_req_done(&mut send).await?;
     send.finish().map_err(|e| anyhow!("finish: {e}"))?;
 
     Ok(format!("'{branch_name}': {fetched} blobs ({fetched_bytes}B), merged"))
@@ -411,32 +405,28 @@ impl ProtocolHandler for BlobServer {
             let mut pile = open_pile(&pile_path)?;
 
             loop {
-                let line = match recv_line(&mut recv).await {
-                    Ok(l) if !l.is_empty() => l,
-                    _ => break,
+                let msg_type = match recv_u8(&mut recv).await {
+                    Ok(t) => t,
+                    Err(_) => break,
                 };
 
-                if line == "DONE" {
-                    break;
-                } else if let Some(branch_name) = line.strip_prefix("HEAD ") {
-                    let branch_name = branch_name.trim();
-                    let head = branch_head_hash(&pile_path, branch_name);
-                    let response = match head {
-                        Some(h) => format!("HEAD {branch_name} {h}"),
-                        None => format!("HEAD {branch_name} NONE"),
-                    };
-                    send_line(&mut send, &response).await?;
-                } else if let Some(hash_hex) = line.strip_prefix("GET_BLOB ") {
-                    let hash_hex = hash_hex.trim();
-                    match get_blob_bytes(&mut pile, hash_hex) {
-                        Some(data) => {
-                            send_line(&mut send, &format!("BLOB {hash_hex} {}", data.len())).await?;
-                            send.write_all(&data).await.map_err(|e| anyhow!("write: {e}"))?;
-                        }
-                        None => {
-                            send_line(&mut send, &format!("MISSING {hash_hex}")).await?;
+                match msg_type {
+                    REQ_DONE => break,
+                    REQ_HEAD => {
+                        let name = recv_branch_name(&mut recv).await?;
+                        match branch_head_raw(&pile_path, &name) {
+                            Some(hash) => send_rsp_head_ok(&mut send, &hash).await?,
+                            None => send_rsp_none(&mut send).await?,
                         }
                     }
+                    REQ_GET_BLOB => {
+                        let hash = recv_hash(&mut recv).await?;
+                        match get_blob(&mut pile, &hash) {
+                            Some(data) => send_rsp_blob(&mut send, &hash, &data).await?,
+                            None => send_rsp_missing(&mut send).await?,
+                        }
+                    }
+                    _ => break, // Unknown message type
                 }
             }
 
@@ -462,67 +452,123 @@ fn open_pile(path: &PathBuf) -> Result<Pile<Blake3>> {
     Ok(pile)
 }
 
-fn has_blob_hex(pile: &mut Pile<Blake3>, hash_hex: &str) -> bool {
-    let Ok(bytes) = hex::decode(hash_hex) else { return false; };
-    if bytes.len() != 32 { return false; }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    let handle = Value::<Handle<Blake3, UnknownBlob>>::new(arr);
+fn has_blob(pile: &mut Pile<Blake3>, hash: &RawHash) -> bool {
+    let handle = Value::<Handle<Blake3, UnknownBlob>>::new(*hash);
     let Ok(reader) = BlobStore::<Blake3>::reader(pile) else { return false; };
     reader.get::<Bytes, UnknownBlob>(handle).is_ok()
 }
 
-fn get_blob_bytes(pile: &mut Pile<Blake3>, hash_hex: &str) -> Option<Vec<u8>> {
-    let bytes = hex::decode(hash_hex).ok()?;
-    if bytes.len() != 32 { return None; }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    let handle = Value::<Handle<Blake3, UnknownBlob>>::new(arr);
+fn get_blob(pile: &mut Pile<Blake3>, hash: &RawHash) -> Option<Vec<u8>> {
+    let handle = Value::<Handle<Blake3, UnknownBlob>>::new(*hash);
     let reader = BlobStore::<Blake3>::reader(pile).ok()?;
     reader.get::<Bytes, UnknownBlob>(handle).ok().map(|b| b.to_vec())
 }
 
-/// Resolve branch name → ID using a temporary repo, then get the head hash.
-fn branch_head_hash(pile_path: &PathBuf, name: &str) -> Option<String> {
-    let mut pile = open_pile(pile_path).ok()?;
+/// Resolve branch name → ID and return the raw head hash.
+fn branch_head_raw(pile_path: &PathBuf, name: &str) -> Option<RawHash> {
+    let pile = open_pile(pile_path).ok()?;
     let key = SigningKey::from_bytes(&[0u8; 32]);
     let mut repo = Repository::new(pile, key, TribleSet::new()).ok()?;
     let branch_id = repo.ensure_branch(name, None).ok()?;
     let head = repo.storage_mut().head(branch_id).ok()??;
-    let hex = hex::encode(head.raw);
+    let hash = head.raw;
     let _ = repo.close();
-    Some(hex)
+    Some(hash)
 }
 
-// ── Wire helpers ─────────────────────────────────────────────────────
+// ── Binary wire protocol ─────────────────────────────────────────────
+//
+// All messages are fixed-width headers + optional payload.
+// No text encoding, no newlines, no hex — raw bytes throughout.
+//
+// Request types (client → server):
+//   0x01  HEAD       [32 bytes branch_id]
+//   0x02  GET_BLOB   [32 bytes hash]
+//   0x00  DONE
+//
+// Response types (server → client):
+//   0x01  HEAD_OK    [32 bytes hash]
+//   0x02  BLOB       [32 bytes hash] [4 bytes len (BE)] [data...]
+//   0x03  MISSING    [32 bytes hash]
+//   0x04  NONE
 
-async fn send_line(send: &mut iroh::endpoint::SendStream, msg: &str) -> Result<()> {
-    let mut buf = msg.as_bytes().to_vec();
-    buf.push(b'\n');
-    send.write_all(&buf).await.map_err(|e| anyhow!("send: {e}"))
+const REQ_DONE: u8 = 0x00;
+const REQ_HEAD: u8 = 0x01;
+const REQ_GET_BLOB: u8 = 0x02;
+
+const RSP_HEAD_OK: u8 = 0x01;
+const RSP_BLOB: u8 = 0x02;
+const RSP_MISSING: u8 = 0x03;
+const RSP_NONE: u8 = 0x04;
+
+type RawHash = [u8; 32];
+
+async fn send_req_head(send: &mut iroh::endpoint::SendStream, name: &str) -> Result<()> {
+    let name_bytes = name.as_bytes();
+    send.write_all(&[REQ_HEAD, name_bytes.len() as u8]).await.map_err(|e| anyhow!("send: {e}"))?;
+    send.write_all(name_bytes).await.map_err(|e| anyhow!("send: {e}"))
 }
 
-async fn recv_line(recv: &mut iroh::endpoint::RecvStream) -> Result<String> {
-    let mut buf = Vec::with_capacity(256);
-    loop {
-        let mut byte = [0u8; 1];
-        match recv.read_exact(&mut byte).await {
-            Ok(()) => {
-                if byte[0] == b'\n' { return Ok(String::from_utf8_lossy(&buf).into_owned()); }
-                buf.push(byte[0]);
-                if buf.len() > 1024 * 1024 { return Err(anyhow!("line too long")); }
-            }
-            Err(_) => {
-                return Ok(String::from_utf8_lossy(&buf).into_owned());
-            }
-        }
-    }
-}
-
-async fn recv_exact(recv: &mut iroh::endpoint::RecvStream, len: usize) -> Result<Vec<u8>> {
+async fn recv_branch_name(recv: &mut iroh::endpoint::RecvStream) -> Result<String> {
+    let len = recv_u8(recv).await? as usize;
     let mut buf = vec![0u8; len];
-    recv.read_exact(&mut buf).await.map_err(|e| anyhow!("recv({len}): {e}"))?;
+    recv.read_exact(&mut buf).await.map_err(|e| anyhow!("recv: {e}"))?;
+    String::from_utf8(buf).map_err(|e| anyhow!("bad branch name: {e}"))
+}
+
+async fn send_req_get_blob(send: &mut iroh::endpoint::SendStream, hash: &RawHash) -> Result<()> {
+    send.write_all(&[REQ_GET_BLOB]).await.map_err(|e| anyhow!("send: {e}"))?;
+    send.write_all(hash).await.map_err(|e| anyhow!("send: {e}"))
+}
+
+async fn send_req_done(send: &mut iroh::endpoint::SendStream) -> Result<()> {
+    send.write_all(&[REQ_DONE]).await.map_err(|e| anyhow!("send: {e}"))
+}
+
+async fn send_rsp_head_ok(send: &mut iroh::endpoint::SendStream, hash: &RawHash) -> Result<()> {
+    send.write_all(&[RSP_HEAD_OK]).await.map_err(|e| anyhow!("send: {e}"))?;
+    send.write_all(hash).await.map_err(|e| anyhow!("send: {e}"))
+}
+
+async fn send_rsp_blob(send: &mut iroh::endpoint::SendStream, hash: &RawHash, data: &[u8]) -> Result<()> {
+    send.write_all(&[RSP_BLOB]).await.map_err(|e| anyhow!("send: {e}"))?;
+    send.write_all(hash).await.map_err(|e| anyhow!("send: {e}"))?;
+    send.write_all(&(data.len() as u32).to_be_bytes()).await.map_err(|e| anyhow!("send: {e}"))?;
+    send.write_all(data).await.map_err(|e| anyhow!("send: {e}"))
+}
+
+async fn send_rsp_missing(send: &mut iroh::endpoint::SendStream) -> Result<()> {
+    send.write_all(&[RSP_MISSING]).await.map_err(|e| anyhow!("send: {e}"))
+}
+
+async fn send_rsp_none(send: &mut iroh::endpoint::SendStream) -> Result<()> {
+    send.write_all(&[RSP_NONE]).await.map_err(|e| anyhow!("send: {e}"))
+}
+
+async fn recv_u8(recv: &mut iroh::endpoint::RecvStream) -> Result<u8> {
+    let mut buf = [0u8; 1];
+    recv.read_exact(&mut buf).await.map_err(|e| anyhow!("recv: {e}"))?;
+    Ok(buf[0])
+}
+
+async fn recv_hash(recv: &mut iroh::endpoint::RecvStream) -> Result<RawHash> {
+    let mut buf = [0u8; 32];
+    recv.read_exact(&mut buf).await.map_err(|e| anyhow!("recv: {e}"))?;
     Ok(buf)
+}
+
+async fn recv_u32_be(recv: &mut iroh::endpoint::RecvStream) -> Result<u32> {
+    let mut buf = [0u8; 4];
+    recv.read_exact(&mut buf).await.map_err(|e| anyhow!("recv: {e}"))?;
+    Ok(u32::from_be_bytes(buf))
+}
+
+async fn recv_blob_data(recv: &mut iroh::endpoint::RecvStream) -> Result<(RawHash, Vec<u8>)> {
+    let hash = recv_hash(recv).await?;
+    let len = recv_u32_be(recv).await? as usize;
+    let mut data = vec![0u8; len];
+    recv.read_exact(&mut data).await.map_err(|e| anyhow!("recv data: {e}"))?;
+    Ok((hash, data))
 }
 
 // ── Key helpers ──────────────────────────────────────────────────────
