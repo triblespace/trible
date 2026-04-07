@@ -352,70 +352,43 @@ async fn sync_branch(
         // MISSING → false positive from conservative scan, skip.
     }
 
-    // Now all blobs are local. Read the remote's data from the commit chain.
-    //
-    // The remote head is a branch-meta blob (SimpleArchive). It contains a
-    // `head` trible pointing to the commit blob. The commit blob contains a
-    // `content` trible pointing to the data blob (the actual TribleSet).
-    //
-    // We use the `content` attribute from triblespace_core::repo to find
-    // the data handle in the commit metadata.
-    let reader = BlobStore::<Blake3>::reader(&mut pile)
-        .map_err(|e| anyhow!("reader: {e:?}"))?;
-
-    // Walk: branch-meta → head commit → content data.
-    let head_hash = hex::decode(&remote_head_hex).map_err(|e| anyhow!("hex: {e}"))?;
+    // All blobs are local. Adopt the remote's commit into our branch
+    // via merge_commit (CAS). No checkout, no diff — just a pointer merge.
+    let remote_head_bytes = hex::decode(&remote_head_hex).map_err(|e| anyhow!("hex: {e}"))?;
     let mut arr = [0u8; 32];
-    arr.copy_from_slice(&head_hash);
-    let branch_meta_handle = Value::<Handle<Blake3, SimpleArchive>>::new(arr);
+    arr.copy_from_slice(&remote_head_bytes);
+    let remote_branch_meta = Value::<Handle<Blake3, SimpleArchive>>::new(arr);
 
-    // Read branch meta → find `head` attribute → read commit → find `content` → read data.
-    let branch_meta: TribleSet = reader.get(branch_meta_handle)
+    // Read the remote's branch meta to find the actual commit handle.
+    let reader = BlobStore::<Blake3>::reader(&mut pile).map_err(|e| anyhow!("reader: {e:?}"))?;
+    let branch_meta: TribleSet = reader.get(remote_branch_meta)
         .map_err(|e| anyhow!("read branch meta: {e:?}"))?;
 
-    // Find the head commit handle in the branch meta.
     use triblespace_core::macros::{find, pattern};
-
-    // The branch meta has: { branch_entity @ repo::head: <commit_handle> }
-    let commit_handle: Value<Handle<Blake3, SimpleArchive>> = find!(
+    let remote_commit: Value<Handle<Blake3, SimpleArchive>> = find!(
         h: Value<Handle<Blake3, SimpleArchive>>,
         pattern!(&branch_meta, [{ _?e @ triblespace_core::repo::head: ?h }])
     ).next().ok_or_else(|| anyhow!("no head in branch meta"))?;
-
-    // Read commit meta → find `content` → read data TribleSet.
-    let commit_meta: TribleSet = reader.get(commit_handle)
-        .map_err(|e| anyhow!("read commit meta: {e:?}"))?;
-
-    let data_handle: Value<Handle<Blake3, SimpleArchive>> = find!(
-        h: Value<Handle<Blake3, SimpleArchive>>,
-        pattern!(&commit_meta, [{ _?e @ triblespace_core::repo::content: ?h }])
-    ).next().ok_or_else(|| anyhow!("no content in commit meta"))?;
-
-    let remote_facts: TribleSet = reader.get(data_handle)
-        .map_err(|e| anyhow!("read data: {e:?}"))?;
-
     drop(reader);
 
-    // Now merge: diff remote facts against local, commit delta.
     let mut repo = Repository::new(pile, signing_key.clone(), TribleSet::new())
         .map_err(|e| anyhow!("repo: {e:?}"))?;
     let branch_id = repo.ensure_branch(branch_name, None)
         .map_err(|e| anyhow!("ensure branch: {e:?}"))?;
-    let mut ws = repo.pull(branch_id).map_err(|e| anyhow!("pull: {e:?}"))?;
-    let local_facts = ws.checkout(..).map_err(|e| anyhow!("checkout: {e:?}"))?.into_facts();
+    let mut ws = repo.pull(branch_id).map_err(|e| anyhow!("pull ws: {e:?}"))?;
 
-    let delta = remote_facts.difference(&local_facts);
-    let n_new = delta.len();
-    if !delta.is_empty() {
-        ws.commit(delta, "sync: pull");
-        repo.try_push(&mut ws).map_err(|e| anyhow!("push: {e:?}"))?;
-    }
+    // CAS: merge the remote commit into our branch.
+    // If local is empty, this adopts the remote chain as-is.
+    // If local has commits, this creates a merge commit with both as parents.
+    ws.merge_commit(remote_commit).map_err(|e| anyhow!("merge: {e:?}"))?;
+    repo.push(&mut ws).map_err(|e| anyhow!("push: {e:?}"))?;
+
     let _ = repo.close();
 
     send_line(&mut send, "DONE").await?;
     send.finish().map_err(|e| anyhow!("finish: {e}"))?;
 
-    Ok(format!("'{branch_name}': {fetched} blobs ({fetched_bytes}B), {n_new} new tribles"))
+    Ok(format!("'{branch_name}': {fetched} blobs ({fetched_bytes}B), merged"))
 }
 
 // ── Blob server (protocol handler) ───────────────────────────────────
