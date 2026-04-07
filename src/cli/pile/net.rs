@@ -444,6 +444,14 @@ fn run_live(
             .await
             .map_err(|e| anyhow!("bind: {e}"))?;
 
+        // Initialize tracing for gossip debug output.
+        if std::env::var("RUST_LOG").is_ok() {
+            tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+                .with_writer(std::io::stderr)
+                .init();
+        }
+
         // Wait for relay connection so peers can find us.
         endpoint.online().await;
 
@@ -465,29 +473,40 @@ fn run_live(
         eprintln!("topic: {topic_name}");
         eprintln!("peers: {}", if bootstrap_ids.is_empty() { "none (waiting for connections)".into() } else { format!("{}", bootstrap_ids.len()) });
 
-        // Subscribe to gossip topic (non-blocking — we handle joins via events)
-        let topic = gossip.subscribe(topic_id, bootstrap_ids).await
-            .map_err(|e| anyhow!("subscribe: {e}"))?;
-        let (sender, mut receiver) = topic.split();
+        // Pre-warm connections to bootstrap peers.
+        // endpoint.connect() uses N0 discovery with retry logic that the
+        // gossip actor's internal bootstrap doesn't have. Once connected,
+        // iroh's address cache is populated and gossip can find the peers.
+        for peer_id in &bootstrap_ids {
+            eprintln!("  connecting to {}...", peer_id.fmt_short());
+            match endpoint.connect(*peer_id, PILE_SYNC_ALPN).await {
+                Ok(conn) => {
+                    eprintln!("  connected to {}", peer_id.fmt_short());
+                    conn.close(0u32.into(), b"warmup");
+                }
+                Err(e) => {
+                    eprintln!("  warning: couldn't reach {}: {e}", peer_id.fmt_short());
+                }
+            }
+        }
+
+        // Subscribe to gossip topic.
+        // If we have bootstrap peers, use subscribe_and_join to wait for
+        // a confirmed connection — this is required for message delivery.
+        let mut topic = if bootstrap_ids.is_empty() {
+            gossip.subscribe(topic_id, bootstrap_ids).await
+                .map_err(|e| anyhow!("subscribe: {e}"))?
+        } else {
+            eprintln!("  joining gossip swarm...");
+            gossip.subscribe_and_join(topic_id, bootstrap_ids).await
+                .map_err(|e| anyhow!("subscribe_and_join: {e}"))?
+        };
+        eprintln!("  gossip ready");
 
         eprintln!("live sync active. (Ctrl-C to stop)\n");
 
-        // Spawn periodic announcements on a separate task.
-        let announce_sender = sender.clone();
-        tokio::spawn(async move {
-            let mut timer = tokio::time::interval(std::time::Duration::from_secs(10));
-            loop {
-                timer.tick().await;
-                for name in ANNOUNCE_BRANCHES {
-                    let msg = format!("BRANCH_UPDATE {name}");
-                    if let Err(e) = announce_sender.broadcast(msg.into_bytes().into()).await {
-                        eprintln!("  announce error: {e}");
-                        return;
-                    }
-                }
-                eprintln!("  (announced branches)");
-            }
-        });
+        // Use the topic handle directly (no split) — broadcast + receive.
+        let mut announce_interval = tokio::time::interval(std::time::Duration::from_secs(10));
 
         loop {
             tokio::select! {
@@ -495,10 +514,24 @@ fn run_live(
                     eprintln!("\nshutting down...");
                     break;
                 }
-                event = receiver.try_next() => {
+                _ = announce_interval.tick() => {
+                    // Include our node ID so each announcement is unique
+                    // (PlumTree prunes peers that send duplicate messages).
+                    for name in ANNOUNCE_BRANCHES {
+                        let msg = format!("BRANCH_UPDATE {name} {public}");
+                        let _ = topic.broadcast(msg.into_bytes().into()).await;
+                    }
+                }
+                event = topic.try_next() => {
                     match event {
                         Ok(Some(GossipEvent::NeighborUp(peer))) => {
                             eprintln!("  peer joined: {}", peer.fmt_short());
+                            // Immediately announce branches to new peer.
+                            // Include our node ID for uniqueness.
+                            for name in ANNOUNCE_BRANCHES {
+                                let msg = format!("BRANCH_UPDATE {name} {public}");
+                                let _ = topic.broadcast(msg.into_bytes().into()).await;
+                            }
                         }
                         Ok(Some(GossipEvent::NeighborDown(peer))) => {
                             eprintln!("  peer left: {}", peer.fmt_short());
@@ -506,8 +539,8 @@ fn run_live(
                         Ok(Some(GossipEvent::Received(msg))) => {
                             let text = String::from_utf8_lossy(&msg.content);
                             let from: EndpointId = msg.delivered_from.into();
-                            if let Some(branch_name) = text.strip_prefix("BRANCH_UPDATE ") {
-                                let branch_name = branch_name.trim();
+                            if let Some(rest) = text.strip_prefix("BRANCH_UPDATE ") {
+                                let branch_name = rest.split_whitespace().next().unwrap_or("").trim();
                                 eprintln!("  [{}] branch '{}' announced", from.fmt_short(), branch_name);
                                 match pull_branch_from_peer(
                                     &endpoint,
