@@ -15,10 +15,46 @@ use iroh_gossip::{Gossip, TopicId};
 use iroh_gossip::api::Event as GossipEvent;
 use futures::TryStreamExt;
 
-use triblespace_net::identity::{load_or_create_pile_key, iroh_secret};
+use triblespace_net::identity::{load_or_create_key, iroh_secret};
 use triblespace_net::protocol::PILE_SYNC_ALPN;
-use triblespace_net::server::PileBlobServer;
 use triblespace_net::sync::sync_branch;
+
+use iroh::protocol::AcceptError;
+
+/// Protocol handler that serves from a pile file.
+/// CLI-specific: the generic `serve()` from triblespace-net does the work.
+#[derive(Debug, Clone)]
+struct PileHandler {
+    pile_path: PathBuf,
+}
+
+impl iroh::protocol::ProtocolHandler for PileHandler {
+    async fn accept(&self, connection: iroh::endpoint::Connection) -> Result<(), AcceptError> {
+        let pile_path = self.pile_path.clone();
+        // Handle multiple bidi streams on one connection.
+        loop {
+            let (mut send, mut recv) = match connection.accept_bi().await {
+                Ok(pair) => pair,
+                Err(_) => break, // Connection closed.
+            };
+            let pile_path = pile_path.clone();
+            tokio::spawn(async move {
+                let result: Result<()> = async {
+                    let mut pile = triblespace_core::repo::pile::Pile::<triblespace_core::value::schemas::hash::Blake3>::open(&pile_path)
+                        .map_err(|e| anyhow!("open: {e:?}"))?;
+                    triblespace_net::server::serve(&mut pile, &mut send, &mut recv).await?;
+                    send.finish().map_err(|e| anyhow!("finish: {e}"))?;
+                    pile.close().map_err(|e| anyhow!("close: {e:?}"))?;
+                    Ok(())
+                }.await;
+                if let Err(e) = result {
+                    eprintln!("handler error: {e}");
+                }
+            });
+        }
+        Ok(())
+    }
+}
 
 // ── CLI ──────────────────────────────────────────────────────────────
 
@@ -84,7 +120,7 @@ pub fn run(cmd: Command) -> Result<()> {
 // ── Identity ─────────────────────────────────────────────────────────
 
 fn run_identity(pile_path: PathBuf, sk: Option<PathBuf>) -> Result<()> {
-    let key = load_or_create_pile_key(&sk, &pile_path)?;
+    let key = load_or_create_key(&sk, pile_path.parent().unwrap_or(pile_path.as_ref()))?;
     let public = iroh_secret(&key).public();
     println!("node: {public}");
     Ok(())
@@ -95,7 +131,7 @@ fn run_identity(pile_path: PathBuf, sk: Option<PathBuf>) -> Result<()> {
 fn run_up(pile_path: PathBuf, sk: Option<PathBuf>) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let key = load_or_create_pile_key(&sk, &pile_path)?;
+        let key = load_or_create_key(&sk, pile_path.parent().unwrap_or(pile_path.as_ref()))?;
         let secret = iroh_secret(&key);
         let public = secret.public();
 
@@ -103,7 +139,7 @@ fn run_up(pile_path: PathBuf, sk: Option<PathBuf>) -> Result<()> {
             .map_err(|e| anyhow!("bind: {e}"))?;
 
         let router = Router::builder(ep.clone())
-            .accept(PILE_SYNC_ALPN, PileBlobServer { pile_path })
+            .accept(PILE_SYNC_ALPN, PileHandler { pile_path })
             .spawn();
 
         eprintln!("node: {public}");
@@ -118,7 +154,7 @@ fn run_up(pile_path: PathBuf, sk: Option<PathBuf>) -> Result<()> {
 fn run_pull(pile_path: PathBuf, remote: String, branch: String, sk: Option<PathBuf>) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let key = load_or_create_pile_key(&sk, &pile_path)?;
+        let key = load_or_create_key(&sk, pile_path.parent().unwrap_or(pile_path.as_ref()))?;
         let ep = Endpoint::builder(presets::N0).secret_key(iroh_secret(&key)).bind().await
             .map_err(|e| anyhow!("bind: {e}"))?;
 
@@ -129,8 +165,11 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, sk: Option<PathB
         let conn = ep.connect(remote_key, PILE_SYNC_ALPN).await
             .map_err(|e| anyhow!("connect: {e}"))?;
 
-        let stats = sync_branch(&conn, &pile_path, &key, &branch).await?;
+        let pile = triblespace_core::repo::pile::Pile::<triblespace_core::value::schemas::hash::Blake3>::open(&pile_path)
+            .map_err(|e| anyhow!("open: {e:?}"))?;
+        let (pile, stats) = triblespace_net::sync::resolve_and_sync(&conn, pile, &key, &branch).await?;
         eprintln!("{stats}");
+        pile.close().map_err(|e| anyhow!("close: {e:?}"))?;
 
         conn.close(0u32.into(), b"done");
         ep.close().await;
@@ -148,7 +187,7 @@ const ANNOUNCE_BRANCHES: &[&str] = &[
 fn run_live(pile_path: PathBuf, topic_name: String, peer_strs: Vec<String>, sk: Option<PathBuf>) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let key = load_or_create_pile_key(&sk, &pile_path)?;
+        let key = load_or_create_key(&sk, pile_path.parent().unwrap_or(pile_path.as_ref()))?;
         let secret = iroh_secret(&key);
         let public = secret.public();
 
@@ -163,7 +202,7 @@ fn run_live(pile_path: PathBuf, topic_name: String, peer_strs: Vec<String>, sk: 
 
         let gossip = Gossip::builder().spawn(ep.clone());
         let router = Router::builder(ep.clone())
-            .accept(PILE_SYNC_ALPN, PileBlobServer { pile_path: pile_path.clone() })
+            .accept(PILE_SYNC_ALPN, PileHandler { pile_path: pile_path.clone() })
             .accept(iroh_gossip::ALPN, gossip.clone())
             .spawn();
 
@@ -238,9 +277,12 @@ fn run_live(pile_path: PathBuf, topic_name: String, peer_strs: Vec<String>, sk: 
                                     eprintln!("  [{}] '{}' new head {}", from.fmt_short(), branch_name, &remote_head[..12]);
                                     match ep.connect(from, PILE_SYNC_ALPN).await {
                                         Ok(conn) => {
-                                            match sync_branch(&conn, &pile_path, &key, branch_name).await {
-                                                Ok(stats) => eprintln!("  {stats}"),
-                                                Err(e) => eprintln!("  sync error: {e}"),
+                                            match triblespace_core::repo::pile::Pile::<triblespace_core::value::schemas::hash::Blake3>::open(&pile_path) {
+                                                Ok(pile) => match triblespace_net::sync::resolve_and_sync(&conn, pile, &key, branch_name).await {
+                                                    Ok((_pile, stats)) => eprintln!("  {stats}"),
+                                                    Err(e) => eprintln!("  sync error: {e}"),
+                                                },
+                                                Err(e) => eprintln!("  open error: {e:?}"),
                                             }
                                             conn.close(0u32.into(), b"done");
                                         }
@@ -266,7 +308,7 @@ fn run_live(pile_path: PathBuf, topic_name: String, peer_strs: Vec<String>, sk: 
 fn run_dht(pile_path: PathBuf, bootstrap_strs: Vec<String>, sk: Option<PathBuf>) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let key = load_or_create_pile_key(&sk, &pile_path)?;
+        let key = load_or_create_key(&sk, pile_path.parent().unwrap_or(pile_path.as_ref()))?;
         let secret = iroh_secret(&key);
         let public = secret.public();
         let my_id: EndpointId = public.into();
@@ -295,7 +337,7 @@ fn run_dht(pile_path: PathBuf, bootstrap_strs: Vec<String>, sk: Option<PathBuf>)
 
         let dht_sender = rpc.inner().as_local().expect("local sender");
         let router = Router::builder(ep.clone())
-            .accept(PILE_SYNC_ALPN, PileBlobServer { pile_path: pile_path.clone() })
+            .accept(PILE_SYNC_ALPN, PileHandler { pile_path: pile_path.clone() })
             .accept(dht_alpn, irpc_iroh::IrohProtocol::with_sender(dht_sender))
             .spawn();
 
