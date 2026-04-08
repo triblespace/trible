@@ -84,6 +84,19 @@ pub enum Command {
         #[arg(long)]
         signing_key: Option<PathBuf>,
     },
+    /// Join the DHT and announce/discover blobs.
+    ///
+    /// Runs a Kademlia DHT node with 32-byte keyspace over iroh
+    /// connections. Announces all local blobs as provider records.
+    /// Other nodes can discover and fetch blobs via the DHT.
+    Dht {
+        pile: PathBuf,
+        /// Bootstrap peer node IDs (comma-separated).
+        #[arg(long, value_delimiter = ',')]
+        bootstrap: Vec<String>,
+        #[arg(long)]
+        signing_key: Option<PathBuf>,
+    },
 }
 
 pub fn run(cmd: Command) -> Result<()> {
@@ -95,6 +108,9 @@ pub fn run(cmd: Command) -> Result<()> {
         }
         Command::Live { pile, topic, peers, signing_key } => {
             run_live(pile, topic, peers, signing_key)
+        }
+        Command::Dht { pile, bootstrap, signing_key } => {
+            run_dht(pile, bootstrap, signing_key)
         }
     }
 }
@@ -549,6 +565,80 @@ impl ProtocolHandler for BlobServer {
 }
 
 // ── Pile helpers ─────────────────────────────────────────────────────
+
+fn run_dht(pile_path: PathBuf, bootstrap_strs: Vec<String>, sk: Option<PathBuf>) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let key = load_or_create_pile_key(&sk, &pile_path)?;
+        let secret = iroh_secret(&key);
+        let public = secret.public();
+        let my_id: EndpointId = public.into();
+
+        let bootstrap: Vec<EndpointId> = bootstrap_strs.iter()
+            .filter_map(|s| s.parse::<iroh_base::PublicKey>().ok().map(EndpointId::from))
+            .collect();
+
+        let ep = Endpoint::builder(presets::N0).secret_key(secret).bind().await
+            .map_err(|e| anyhow!("bind: {e}"))?;
+        ep.online().await;
+
+        // Set up pile sync handler (serves GET_BLOB/SYNC/LIST).
+        let handler = BlobServer {
+            pile_path: pile_path.clone(),
+            signing_key: key.clone(),
+        };
+
+        // Set up the DHT node.
+        let dht_alpn = iroh_dht::rpc::ALPN;
+        let pool = iroh_blobs::util::connection_pool::ConnectionPool::new(
+            ep.clone(),
+            dht_alpn,
+            iroh_blobs::util::connection_pool::Options {
+                max_connections: 64,
+                idle_timeout: std::time::Duration::from_secs(30),
+                connect_timeout: std::time::Duration::from_secs(10),
+                on_connected: None,
+            },
+        );
+        let iroh_pool = iroh_dht::pool::IrohPool::new(ep.clone(), pool);
+        let (rpc, api) = iroh_dht::create_node(
+            my_id,
+            iroh_pool.clone(),
+            bootstrap.clone(),
+            Default::default(),
+        );
+        iroh_pool.set_self_client(Some(rpc.downgrade()));
+
+        // Register both protocols with the router.
+        let dht_sender = rpc.inner().as_local().expect("DHT RPC client has local sender");
+        let router = Router::builder(ep.clone())
+            .accept(PILE_SYNC_ALPN, handler)
+            .accept(dht_alpn, irpc_iroh::IrohProtocol::with_sender(dht_sender))
+            .spawn();
+
+        eprintln!("node: {public}");
+        eprintln!("DHT node running with {} bootstrap peer(s)", bootstrap.len());
+
+        // Announce all local blobs to the DHT.
+        let mut pile = open_pile(&pile_path)?;
+        let reader = BlobStore::<Blake3>::reader(&mut pile).map_err(|e| anyhow!("reader: {e:?}"))?;
+        let mut announced = 0usize;
+        for item in reader.iter() {
+            if let Ok((handle, _blob)) = item {
+                let hash = blake3::Hash::from_bytes(handle.raw);
+                if let Ok(_stored_on) = api.announce_provider(hash, my_id).await {
+                    announced += 1;
+                }
+            }
+        }
+        let _ = pile.close();
+        eprintln!("announced {announced} blobs to DHT");
+        eprintln!("listening... (Ctrl-C to stop)\n");
+
+        tokio::signal::ctrl_c().await?;
+        router.shutdown().await.map_err(|e| anyhow!("shutdown: {e}"))
+    })
+}
 
 fn open_pile(path: &PathBuf) -> Result<Pile<Blake3>> {
     let mut pile = Pile::<Blake3>::open(path).map_err(|e| anyhow!("open: {e:?}"))?;

@@ -43,6 +43,9 @@ anybytes = { version = "0.20.2", features = ["zerocopy"] }
 iroh = { path = "../iroh/iroh" }
 iroh-base = { path = "../iroh/iroh-base" }
 iroh-gossip = { path = "../iroh-gossip", features = ["net"] }
+iroh-dht = { path = "../iroh-dht" }
+iroh-blobs = { path = "../iroh-blobs", default-features = false }
+irpc-iroh = "0.13.0"
 blake3 = "1.8"
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
