@@ -136,22 +136,25 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, sk: Option<PathB
         let (remote_id, _) = triblespace_net::sync::resolve_branch_name(&conn, &branch).await?
             .ok_or_else(|| anyhow!("branch '{}' not found on remote", branch))?;
 
-        // Repository wraps Follower wraps Pile.
+        let rt = tokio::runtime::Handle::current();
+
+        // Follower wraps Pile, pulls blobs automatically.
         let pile = open_pile(&pile_path)?;
-        let follower = triblespace_net::follower::Follower::new(pile, conn.clone());
+        let follower = triblespace_net::follower::Follower::builder(pile, conn.clone())
+            .build(&rt);
+
+        // Pull blobs for this branch.
+        follower.sync(remote_id).await?;
+        let remote_head_hash = follower.remote_head(remote_id)
+            .ok_or_else(|| anyhow!("remote has no head"))?;
+
+        // Repository wraps Follower — regular merge.
         let mut repo = triblespace_core::repo::Repository::new(follower, key.clone(), triblespace_core::trible::TribleSet::new())
             .map_err(|e| anyhow!("repo: {e:?}"))?;
         let local_id = repo.ensure_branch(&branch, None)
             .map_err(|_| anyhow!("ensure branch failed"))?;
 
-        // Pull blobs from remote.
-        let remote_head: [u8; 16] = remote_id.into();
-        let remote_head_hash = triblespace_net::protocol::op_head(&conn, &remote_head).await?
-            .ok_or_else(|| anyhow!("remote has no head for this branch"))?;
-        let stats = repo.storage_mut().pull_reachable(&remote_head_hash).await?;
-        eprintln!("{stats}");
-
-        // Regular merge — repo doesn't know it's wrapping a Follower.
+        // Extract commit hash from branch metadata.
         use triblespace_core::repo::{BlobStore, BlobStoreGet};
         use triblespace_core::value::Value;
         let remote_commit = {
@@ -168,10 +171,8 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, sk: Option<PathB
         let mut ws = repo.pull(local_id).map_err(|e| anyhow!("pull: {e:?}"))?;
         ws.merge_commit(remote_commit).map_err(|e| anyhow!("merge: {e:?}"))?;
         repo.push(&mut ws).map_err(|_| anyhow!("push failed"))?;
+        eprintln!("synced '{branch}'");
 
-        let follower = repo.into_storage();
-        let pile = follower.into_store();
-        pile.close().map_err(|e| anyhow!("close: {e:?}"))?;
         conn.close(0u32.into(), b"done");
         ep.close().await;
         Ok(())
