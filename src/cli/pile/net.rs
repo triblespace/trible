@@ -42,7 +42,7 @@ impl iroh::protocol::ProtocolHandler for PileHandler {
                 let result: Result<()> = async {
                     let mut pile = triblespace_core::repo::pile::Pile::<triblespace_core::value::schemas::hash::Blake3>::open(&pile_path)
                         .map_err(|e| anyhow!("open: {e:?}"))?;
-                    triblespace_net::server::serve(&mut pile, &mut send, &mut recv).await?;
+                    triblespace_net::server::handle_stream(&mut pile, &mut send, &mut recv).await?;
                     send.finish().map_err(|e| anyhow!("finish: {e}"))?;
                     pile.close().map_err(|e| anyhow!("close: {e:?}"))?;
                     Ok(())
