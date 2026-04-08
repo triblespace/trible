@@ -136,20 +136,40 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, sk: Option<PathB
         let (remote_id, _) = triblespace_net::sync::resolve_branch_name(&conn, &branch).await?
             .ok_or_else(|| anyhow!("branch '{}' not found on remote", branch))?;
 
-        // Ensure local branch exists.
+        // Repository wraps Follower wraps Pile.
         let pile = open_pile(&pile_path)?;
-        let mut repo = triblespace_core::repo::Repository::new(pile, key.clone(), triblespace_core::trible::TribleSet::new())
+        let follower = triblespace_net::follower::Follower::new(pile, conn.clone());
+        let mut repo = triblespace_core::repo::Repository::new(follower, key.clone(), triblespace_core::trible::TribleSet::new())
             .map_err(|e| anyhow!("repo: {e:?}"))?;
         let local_id = repo.ensure_branch(&branch, None)
             .map_err(|_| anyhow!("ensure branch failed"))?;
-        let pile = repo.into_storage();
 
-        // Follow: pull everything reachable, merge.
-        let rt = tokio::runtime::Handle::current();
-        let mut follower = triblespace_net::follower::Follower::new(pile, conn.clone(), rt);
-        let stats = follower.sync_branch(&key, remote_id, local_id).await?;
+        // Pull blobs from remote.
+        let remote_head: [u8; 16] = remote_id.into();
+        let remote_head_hash = triblespace_net::protocol::op_head(&conn, &remote_head).await?
+            .ok_or_else(|| anyhow!("remote has no head for this branch"))?;
+        let stats = repo.storage_mut().pull_reachable(&remote_head_hash).await?;
         eprintln!("{stats}");
 
+        // Regular merge — repo doesn't know it's wrapping a Follower.
+        use triblespace_core::repo::{BlobStore, BlobStoreGet};
+        use triblespace_core::value::Value;
+        let remote_commit = {
+            let reader = BlobStore::<triblespace_core::value::schemas::hash::Blake3>::reader(repo.storage_mut()).map_err(|e| anyhow!("reader: {e:?}"))?;
+            let branch_meta_handle = Value::<triblespace_core::value::schemas::hash::Handle<triblespace_core::value::schemas::hash::Blake3, triblespace_core::blob::schemas::simplearchive::SimpleArchive>>::new(remote_head_hash);
+            let branch_meta: triblespace_core::trible::TribleSet = reader.get(branch_meta_handle)
+                .map_err(|e| anyhow!("read meta: {e:?}"))?;
+            use triblespace_core::macros::{find, pattern};
+            find!(
+                h: Value<triblespace_core::value::schemas::hash::Handle<triblespace_core::value::schemas::hash::Blake3, triblespace_core::blob::schemas::simplearchive::SimpleArchive>>,
+                pattern!(&branch_meta, [{ _?e @ triblespace_core::repo::head: ?h }])
+            ).next().ok_or_else(|| anyhow!("no head commit in branch metadata"))?
+        };
+        let mut ws = repo.pull(local_id).map_err(|e| anyhow!("pull: {e:?}"))?;
+        ws.merge_commit(remote_commit).map_err(|e| anyhow!("merge: {e:?}"))?;
+        repo.push(&mut ws).map_err(|_| anyhow!("push failed"))?;
+
+        let follower = repo.into_storage();
         let pile = follower.into_store();
         pile.close().map_err(|e| anyhow!("close: {e:?}"))?;
         conn.close(0u32.into(), b"done");
