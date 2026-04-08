@@ -132,11 +132,26 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, sk: Option<PathB
         let conn = ep.connect(remote_key, PILE_SYNC_ALPN).await
             .map_err(|e| anyhow!("connect: {e}"))?;
 
-        let pile = open_pile(&pile_path)?;
-        let (pile, stats) = triblespace_net::sync::resolve_and_sync(&conn, pile, &key, &branch).await?;
-        eprintln!("{stats}");
-        pile.close().map_err(|e| anyhow!("close: {e:?}"))?;
+        // Resolve branch name → id on remote.
+        let (remote_id, _) = triblespace_net::sync::resolve_branch_name(&conn, &branch).await?
+            .ok_or_else(|| anyhow!("branch '{}' not found on remote", branch))?;
 
+        // Ensure local branch exists.
+        let pile = open_pile(&pile_path)?;
+        let mut repo = triblespace_core::repo::Repository::new(pile, key.clone(), triblespace_core::trible::TribleSet::new())
+            .map_err(|e| anyhow!("repo: {e:?}"))?;
+        let local_id = repo.ensure_branch(&branch, None)
+            .map_err(|_| anyhow!("ensure branch failed"))?;
+        let pile = repo.into_storage();
+
+        // Follow: pull everything reachable, merge.
+        let rt = tokio::runtime::Handle::current();
+        let mut follower = triblespace_net::follower::Follower::new(pile, conn.clone(), rt);
+        let stats = follower.sync_branch(&key, remote_id, local_id).await?;
+        eprintln!("{stats}");
+
+        let pile = follower.into_store();
+        pile.close().map_err(|e| anyhow!("close: {e:?}"))?;
         conn.close(0u32.into(), b"done");
         ep.close().await;
         Ok(())
