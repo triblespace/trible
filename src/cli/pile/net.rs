@@ -12,7 +12,7 @@ use iroh::Endpoint;
 use iroh_base::EndpointId;
 
 use triblespace_net::identity::{load_or_create_key, iroh_secret};
-use triblespace_net::node::NetworkStore;
+use triblespace_net::node::Host;
 use triblespace_net::protocol::PILE_SYNC_ALPN;
 
 type Pile = triblespace_core::repo::pile::Pile<triblespace_core::value::schemas::hash::Blake3>;
@@ -108,7 +108,7 @@ fn run_up(pile_path: PathBuf, sk: Option<PathBuf>) -> Result<()> {
         let key = load_or_create_key(&sk, key_dir(&pile_path))?;
         let pile = open_pile(&pile_path)?;
 
-        let node = NetworkStore::builder(pile, key).build().await?;
+        let node = Host::builder(pile, key).build().await?;
 
         eprintln!("node: {}", node.id());
         eprintln!("listening... (Ctrl-C to stop)");
@@ -187,7 +187,7 @@ fn run_live(pile_path: PathBuf, topic: String, peer_strs: Vec<String>, sk: Optio
         let peers = parse_peers(&peer_strs);
         let pile = open_pile(&pile_path)?;
 
-        let node = NetworkStore::builder(pile, key)
+        let node = Host::builder(pile, key)
             .gossip(&topic, peers)
             .build().await?;
 
@@ -207,7 +207,7 @@ fn run_dht(pile_path: PathBuf, bootstrap_strs: Vec<String>, sk: Option<PathBuf>)
         let bootstrap = parse_peers(&bootstrap_strs);
         let pile = open_pile(&pile_path)?;
 
-        let node = NetworkStore::builder(pile, key)
+        let node = Host::builder(pile, key)
             .dht(bootstrap)
             .build().await?;
 
