@@ -176,6 +176,22 @@ fn run_sync(pile_path: PathBuf, peer_strs: Vec<String>, topic: Option<String>, k
                     let Some(remote_commit) = remote_ws.head() else { return Ok(()); };
 
                     let mut local_ws = repo.pull(local_id).map_err(|e| anyhow!("pull local: {e:?}"))?;
+
+                    // Skip if remote commit is already our head or an ancestor.
+                    if let Some(local_head) = local_ws.head() {
+                        if local_head == remote_commit {
+                            return Ok(()); // Same commit — nothing to merge.
+                        }
+                        // Check if remote is an ancestor of local.
+                        use triblespace_core::repo::{ancestors, CommitSelector};
+                        let all_ancestors = ancestors(local_head)
+                            .select(&mut local_ws)
+                            .map_err(|e| anyhow!("ancestors: {e:?}"))?;
+                        if all_ancestors.get(&remote_commit.raw).is_some() {
+                            return Ok(()); // Remote is already an ancestor — skip.
+                        }
+                    }
+
                     local_ws.merge_commit(remote_commit).map_err(|e| anyhow!("merge: {e:?}"))?;
                     repo.push(&mut local_ws).map_err(|_| anyhow!("push"))?;
                     let _ = repo.into_storage().close();
