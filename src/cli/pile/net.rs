@@ -206,7 +206,11 @@ fn run_sync(pile_path: PathBuf, peer_strs: Vec<String>, topic: Option<String>, k
                     Ok(()) => {
                         merged_heads.insert(branch_bytes, head_hash);
                         eprintln!("  merged '{name}'");
+                        // Refresh snapshot + gossip all branches (merge changed heads).
                         if let Some(snap) = triblespace_net::host::StoreSnapshot::from_store(&mut follower) {
+                            for (b, h) in &snap.branches {
+                                sender.gossip(*b, *h);
+                            }
                             sender.update_snapshot(snap);
                         }
                     }
