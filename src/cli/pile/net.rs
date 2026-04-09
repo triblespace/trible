@@ -136,7 +136,7 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, sk: Option<PathB
             .bind().await.map_err(|e| anyhow!("bind: {e}"))?;
         let conn = ep.connect(remote_key, triblespace_net::protocol::PILE_SYNC_ALPN).await
             .map_err(|e| anyhow!("connect: {e}"))?;
-        let (id, _) = triblespace_net::sync::resolve_branch_name(&conn, &branch).await?
+        let (id, _) = triblespace_net::protocol::resolve_branch_name(&conn, &branch).await?
             .ok_or_else(|| anyhow!("branch '{branch}' not found"))?;
         let id_bytes: [u8; 16] = id.into();
         conn.close(0u32.into(), b"done");
