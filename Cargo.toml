@@ -52,11 +52,9 @@ tokio = { version = "1", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [patch.crates-io]
-# iroh main requires unreleased noq from git.
 noq = { git = "https://github.com/n0-computer/noq", branch = "main" }
 noq-udp = { git = "https://github.com/n0-computer/noq", branch = "main" }
 noq-proto = { git = "https://github.com/n0-computer/noq", branch = "main" }
-# Unify all crate versions to local checkouts.
 iroh = { path = "../iroh/iroh" }
 iroh-base = { path = "../iroh/iroh-base" }
 triblespace-core = { path = "../triblespace-rs/triblespace-core" }
