@@ -64,14 +64,6 @@ pub enum Command {
         #[arg(long)]
         signing_key: Option<PathBuf>,
     },
-    /// Join the DHT and announce/discover blobs.
-    Dht {
-        pile: PathBuf,
-        #[arg(long, value_delimiter = ',')]
-        bootstrap: Vec<String>,
-        #[arg(long)]
-        signing_key: Option<PathBuf>,
-    },
 }
 
 pub fn run(cmd: Command) -> Result<()> {
@@ -83,9 +75,6 @@ pub fn run(cmd: Command) -> Result<()> {
         }
         Command::Live { pile, topic, peers, signing_key } => {
             run_live(pile, topic, peers, signing_key)
-        }
-        Command::Dht { pile, bootstrap, signing_key } => {
-            run_dht(pile, bootstrap, signing_key)
         }
     }
 }
@@ -240,9 +229,8 @@ fn run_live(pile_path: PathBuf, topic: String, peer_strs: Vec<String>, sk: Optio
     let pile = open_pile(&pile_path)?;
 
     let (sender, receiver) = host::spawn(key.clone(), HostConfig {
+        peers,
         gossip_topic: Some(topic.clone()),
-        gossip_peers: peers,
-        ..Default::default()
     });
     let leader = Leader::new(pile, sender.clone());
     let mut follower = Follower::new(leader, receiver);
@@ -324,21 +312,3 @@ fn run_live(pile_path: PathBuf, topic: String, peer_strs: Vec<String>, sk: Optio
     }
 }
 
-// ── DHT ──────────────────────────────────────────────────────────────
-
-fn run_dht(pile_path: PathBuf, bootstrap_strs: Vec<String>, sk: Option<PathBuf>) -> Result<()> {
-    let key = load_or_create_key(&sk, key_dir(&pile_path))?;
-    let bootstrap = parse_peers(&bootstrap_strs);
-    let pile = open_pile(&pile_path)?;
-
-    let (sender, _receiver) = host::spawn(key, HostConfig {
-        dht_bootstrap: bootstrap,
-        ..Default::default()
-    });
-    let _leader = Leader::new(pile, sender.clone());
-
-    eprintln!("node: {}", sender.id());
-    eprintln!("listening... (Ctrl-C to stop)");
-
-    loop { std::thread::sleep(std::time::Duration::from_secs(1)); }
-}
