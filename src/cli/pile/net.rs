@@ -247,10 +247,14 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, key_path: Option
         sender.fetch(remote_key.into(), branch_id_bytes);
         eprintln!("syncing...");
 
-        // Poll until HEAD arrives.
+        // Poll until HEAD arrives (timeout after 30s).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             follower.poll();
             if follower.remote_head_raw(&branch_id_bytes).is_some() { break; }
+            if std::time::Instant::now() > deadline {
+                return Err(anyhow!("timed out waiting for remote HEAD"));
+            }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
