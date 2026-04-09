@@ -1,19 +1,18 @@
 //! CLI commands for distributed pile sync over iroh.
 //!
-//! Thin wrappers around `triblespace_net` — argument parsing and
-//! progress output only. All protocol logic lives in the library.
+//! Thin wrappers around Host / Leader / Follower.
 
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
-use iroh::endpoint::presets;
-use iroh::Endpoint;
 use iroh_base::EndpointId;
 
-use triblespace_net::identity::{load_or_create_key, iroh_secret};
-use triblespace_net::node::Host;
-use triblespace_net::protocol::PILE_SYNC_ALPN;
+use triblespace_net::channel::NetCommand;
+use triblespace_net::host::{Host, HostConfig};
+use triblespace_net::leader::Leader;
+use triblespace_net::follower::Follower;
+use triblespace_net::identity::load_or_create_key;
 
 type Pile = triblespace_core::repo::pile::Pile<triblespace_core::value::schemas::hash::Blake3>;
 
@@ -96,124 +95,169 @@ pub fn run(cmd: Command) -> Result<()> {
 
 fn run_identity(pile_path: PathBuf, sk: Option<PathBuf>) -> Result<()> {
     let key = load_or_create_key(&sk, key_dir(&pile_path))?;
-    println!("node: {}", iroh_secret(&key).public());
+    let public = triblespace_net::identity::iroh_secret(&key).public();
+    println!("node: {public}");
     Ok(())
 }
 
 // ── Up ───────────────────────────────────────────────────────────────
 
 fn run_up(pile_path: PathBuf, sk: Option<PathBuf>) -> Result<()> {
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        let key = load_or_create_key(&sk, key_dir(&pile_path))?;
-        let pile = open_pile(&pile_path)?;
+    let key = load_or_create_key(&sk, key_dir(&pile_path))?;
+    let pile = open_pile(&pile_path)?;
 
-        let node = Host::builder(pile, key).build().await?;
+    let host = Host::new(key.clone(), HostConfig::default());
+    let leader = Leader::new(pile, host.commands());
 
-        eprintln!("node: {}", node.id());
-        eprintln!("listening... (Ctrl-C to stop)");
-        node.run_until_ctrl_c().await
-    })
+    eprintln!("node: {}", host.id());
+    eprintln!("listening... (Ctrl-C to stop)");
+
+    // TODO: serve protocol via Host thread (needs store access refactor)
+    // For now, just keep the node alive.
+    loop { std::thread::sleep(std::time::Duration::from_secs(1)); }
 }
 
 // ── Pull ─────────────────────────────────────────────────────────────
 
 fn run_pull(pile_path: PathBuf, remote: String, branch: String, sk: Option<PathBuf>) -> Result<()> {
+    let key = load_or_create_key(&sk, key_dir(&pile_path))?;
+    let pile = open_pile(&pile_path)?;
+
+    let remote_key: iroh_base::PublicKey = remote.parse()
+        .map_err(|e| anyhow!("bad node ID: {e}"))?;
+    let remote_id: EndpointId = remote_key.into();
+
+    // Resolve branch name → id via the sync module (needs async for now).
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        let key = load_or_create_key(&sk, key_dir(&pile_path))?;
-        let ep = Endpoint::builder(presets::N0).secret_key(iroh_secret(&key)).bind().await
-            .map_err(|e| anyhow!("bind: {e}"))?;
-
-        let remote_key: iroh_base::PublicKey = remote.parse()
-            .map_err(|e| anyhow!("bad node ID: {e}"))?;
-
-        eprintln!("connecting to {}...", remote_key.fmt_short());
-        let conn = ep.connect(remote_key, PILE_SYNC_ALPN).await
+    let branch_id_bytes = rt.block_on(async {
+        let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+            .secret_key(triblespace_net::identity::iroh_secret(&key))
+            .bind().await.map_err(|e| anyhow!("bind: {e}"))?;
+        let conn = ep.connect(remote_key, triblespace_net::protocol::PILE_SYNC_ALPN).await
             .map_err(|e| anyhow!("connect: {e}"))?;
+        let (id, _) = triblespace_net::sync::resolve_branch_name(&conn, &branch).await?
+            .ok_or_else(|| anyhow!("branch '{branch}' not found"))?;
+        let id_bytes: [u8; 16] = id.into();
+        conn.close(0u32.into(), b"done");
+        Ok::<_, anyhow::Error>(id_bytes)
+    })?;
 
-        // Resolve branch name → id on remote.
-        let (remote_id, _) = triblespace_net::sync::resolve_branch_name(&conn, &branch).await?
-            .ok_or_else(|| anyhow!("branch '{}' not found on remote", branch))?;
+    // Use Host + Follower for the sync.
+    let mut host = Host::new(key.clone(), HostConfig::default());
+    let events = host.take_events().unwrap();
+    let leader = Leader::new(pile, host.commands());
+    let mut follower = Follower::new(leader, events);
 
-        let rt = tokio::runtime::Handle::current();
+    // Request fetch.
+    host.commands().send(NetCommand::Fetch {
+        peer: remote_id,
+        branch: branch_id_bytes,
+    }).map_err(|e| anyhow!("send: {e}"))?;
 
-        // Follower wraps Pile, pulls blobs automatically.
-        let pile = open_pile(&pile_path)?;
-        let follower = triblespace_net::follower::Follower::builder(pile, conn.clone())
-            .build(&rt);
+    eprintln!("connecting to {}...", remote_key.fmt_short());
 
-        // Pull blobs for this branch.
-        follower.sync(remote_id).await?;
-        let remote_head_hash = follower.remote_head(remote_id)
-            .ok_or_else(|| anyhow!("remote has no head"))?;
+    // Poll until we get the HEAD event.
+    loop {
+        let n = follower.poll();
+        if follower.remote_head_raw(&branch_id_bytes).is_some() {
+            break;
+        }
+        if n == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
 
-        // Repository wraps Follower — regular merge.
-        let mut repo = triblespace_core::repo::Repository::new(follower, key.clone(), triblespace_core::trible::TribleSet::new())
+    let remote_head = follower.remote_head_raw(&branch_id_bytes).unwrap();
+    eprintln!("synced blobs");
+
+    // Merge using Repository.
+    use triblespace_core::repo::{BlobStore, BlobStoreGet, Repository};
+    use triblespace_core::value::Value;
+    let local_branch_id = {
+        let mut repo = Repository::new(follower, key.clone(), triblespace_core::trible::TribleSet::new())
             .map_err(|e| anyhow!("repo: {e:?}"))?;
         let local_id = repo.ensure_branch(&branch, None)
-            .map_err(|_| anyhow!("ensure branch failed"))?;
+            .map_err(|_| anyhow!("ensure branch"))?;
 
-        // Extract commit hash from branch metadata.
-        use triblespace_core::repo::{BlobStore, BlobStoreGet};
-        use triblespace_core::value::Value;
         let remote_commit = {
-            let reader = BlobStore::<triblespace_core::value::schemas::hash::Blake3>::reader(repo.storage_mut()).map_err(|e| anyhow!("reader: {e:?}"))?;
-            let branch_meta_handle = Value::<triblespace_core::value::schemas::hash::Handle<triblespace_core::value::schemas::hash::Blake3, triblespace_core::blob::schemas::simplearchive::SimpleArchive>>::new(remote_head_hash);
-            let branch_meta: triblespace_core::trible::TribleSet = reader.get(branch_meta_handle)
+            let reader = BlobStore::<triblespace_core::value::schemas::hash::Blake3>::reader(repo.storage_mut())
+                .map_err(|e| anyhow!("reader: {e:?}"))?;
+            let meta_handle = Value::<triblespace_core::value::schemas::hash::Handle<
+                triblespace_core::value::schemas::hash::Blake3,
+                triblespace_core::blob::schemas::simplearchive::SimpleArchive,
+            >>::new(remote_head);
+            let meta: triblespace_core::trible::TribleSet = reader.get(meta_handle)
                 .map_err(|e| anyhow!("read meta: {e:?}"))?;
             use triblespace_core::macros::{find, pattern};
             find!(
-                h: Value<triblespace_core::value::schemas::hash::Handle<triblespace_core::value::schemas::hash::Blake3, triblespace_core::blob::schemas::simplearchive::SimpleArchive>>,
-                pattern!(&branch_meta, [{ _?e @ triblespace_core::repo::head: ?h }])
-            ).next().ok_or_else(|| anyhow!("no head commit in branch metadata"))?
+                h: Value<triblespace_core::value::schemas::hash::Handle<
+                    triblespace_core::value::schemas::hash::Blake3,
+                    triblespace_core::blob::schemas::simplearchive::SimpleArchive,
+                >>,
+                pattern!(&meta, [{ _?e @ triblespace_core::repo::head: ?h }])
+            ).next().ok_or_else(|| anyhow!("no head commit"))?
         };
+
         let mut ws = repo.pull(local_id).map_err(|e| anyhow!("pull: {e:?}"))?;
         ws.merge_commit(remote_commit).map_err(|e| anyhow!("merge: {e:?}"))?;
-        repo.push(&mut ws).map_err(|_| anyhow!("push failed"))?;
-        eprintln!("synced '{branch}'");
+        repo.push(&mut ws).map_err(|_| anyhow!("push"))?;
+        let follower = repo.into_storage();
+        let leader = follower.into_store();
+        let pile = leader.into_store();
+        pile.close().map_err(|e| anyhow!("close: {e:?}"))?;
+        local_id
+    };
 
-        conn.close(0u32.into(), b"done");
-        ep.close().await;
-        Ok(())
-    })
+    eprintln!("merged '{branch}'");
+    Ok(())
 }
 
 // ── Live ─────────────────────────────────────────────────────────────
 
 fn run_live(pile_path: PathBuf, topic: String, peer_strs: Vec<String>, sk: Option<PathBuf>) -> Result<()> {
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        let key = load_or_create_key(&sk, key_dir(&pile_path))?;
-        let peers = parse_peers(&peer_strs);
-        let pile = open_pile(&pile_path)?;
+    let key = load_or_create_key(&sk, key_dir(&pile_path))?;
+    let peers = parse_peers(&peer_strs);
+    let pile = open_pile(&pile_path)?;
 
-        let node = Host::builder(pile, key)
-            .gossip(&topic, peers)
-            .build().await?;
+    let mut host = Host::new(key, HostConfig {
+        gossip_topic: Some(topic.clone()),
+        gossip_peers: peers,
+        ..Default::default()
+    });
+    let events = host.take_events().unwrap();
+    let leader = Leader::new(pile, host.commands());
+    let mut follower = Follower::new(leader, events);
 
-        eprintln!("node: {}", node.id());
-        eprintln!("topic: {topic}");
-        eprintln!("live sync active. (Ctrl-C to stop)\n");
-        node.run_until_ctrl_c().await
-    })
+    eprintln!("node: {}", host.id());
+    eprintln!("topic: {topic}");
+    eprintln!("live sync active. (Ctrl-C to stop)\n");
+
+    loop {
+        let n = follower.poll();
+        if n > 0 {
+            for (branch, head) in follower.remote_heads() {
+                eprintln!("  remote head: {} = {}", hex::encode(branch), hex::encode(&head[..8]));
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 // ── DHT ──────────────────────────────────────────────────────────────
 
 fn run_dht(pile_path: PathBuf, bootstrap_strs: Vec<String>, sk: Option<PathBuf>) -> Result<()> {
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        let key = load_or_create_key(&sk, key_dir(&pile_path))?;
-        let bootstrap = parse_peers(&bootstrap_strs);
-        let pile = open_pile(&pile_path)?;
+    let key = load_or_create_key(&sk, key_dir(&pile_path))?;
+    let bootstrap = parse_peers(&bootstrap_strs);
+    let pile = open_pile(&pile_path)?;
 
-        let node = Host::builder(pile, key)
-            .dht(bootstrap)
-            .build().await?;
+    let host = Host::new(key, HostConfig {
+        dht_bootstrap: bootstrap,
+        ..Default::default()
+    });
+    let leader = Leader::new(pile, host.commands());
 
-        eprintln!("node: {}", node.id());
-        eprintln!("listening... (Ctrl-C to stop)");
-        node.run_until_ctrl_c().await
-    })
+    eprintln!("node: {}", host.id());
+    eprintln!("listening... (Ctrl-C to stop)");
+
+    loop { std::thread::sleep(std::time::Duration::from_secs(1)); }
 }
