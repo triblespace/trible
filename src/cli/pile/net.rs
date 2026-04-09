@@ -8,7 +8,6 @@ use anyhow::{Result, anyhow};
 use clap::Parser;
 use iroh_base::EndpointId;
 
-use triblespace_net::channel::NetCommand;
 use triblespace_net::host::{Host, HostConfig};
 use triblespace_net::leader::Leader;
 use triblespace_net::follower::Follower;
@@ -107,13 +106,15 @@ fn run_up(pile_path: PathBuf, sk: Option<PathBuf>) -> Result<()> {
     let pile = open_pile(&pile_path)?;
 
     let host = Host::new(key.clone(), HostConfig::default());
-    let leader = Leader::new(pile, host.commands());
+    let mut leader = Leader::new(pile, host.clone());
+
+    // Seed the snapshot so Host can serve immediately.
+    if let Some(snap) = triblespace_net::host::StoreSnapshot::from_store(&mut leader) {
+        host.update_snapshot(snap);
+    }
 
     eprintln!("node: {}", host.id());
     eprintln!("listening... (Ctrl-C to stop)");
-
-    // TODO: serve protocol via Host thread (needs store access refactor)
-    // For now, just keep the node alive.
     loop { std::thread::sleep(std::time::Duration::from_secs(1)); }
 }
 
@@ -143,16 +144,12 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, sk: Option<PathB
     })?;
 
     // Use Host + Follower for the sync.
-    let mut host = Host::new(key.clone(), HostConfig::default());
-    let events = host.take_events().unwrap();
-    let leader = Leader::new(pile, host.commands());
-    let mut follower = Follower::new(leader, events);
+    let host = Host::new(key.clone(), HostConfig::default());
+    let leader = Leader::new(pile, host.clone());
+    let mut follower = Follower::new(leader, host.clone());
 
     // Request fetch.
-    host.commands().send(NetCommand::Fetch {
-        peer: remote_id,
-        branch: branch_id_bytes,
-    }).map_err(|e| anyhow!("send: {e}"))?;
+    host.fetch(remote_id, branch_id_bytes);
 
     eprintln!("connecting to {}...", remote_key.fmt_short());
 
@@ -219,14 +216,13 @@ fn run_live(pile_path: PathBuf, topic: String, peer_strs: Vec<String>, sk: Optio
     let peers = parse_peers(&peer_strs);
     let pile = open_pile(&pile_path)?;
 
-    let mut host = Host::new(key, HostConfig {
+    let host = Host::new(key, HostConfig {
         gossip_topic: Some(topic.clone()),
         gossip_peers: peers,
         ..Default::default()
     });
-    let events = host.take_events().unwrap();
-    let leader = Leader::new(pile, host.commands());
-    let mut follower = Follower::new(leader, events);
+    let leader = Leader::new(pile, host.clone());
+    let mut follower = Follower::new(leader, host.clone());
 
     eprintln!("node: {}", host.id());
     eprintln!("topic: {topic}");
@@ -254,7 +250,7 @@ fn run_dht(pile_path: PathBuf, bootstrap_strs: Vec<String>, sk: Option<PathBuf>)
         dht_bootstrap: bootstrap,
         ..Default::default()
     });
-    let leader = Leader::new(pile, host.commands());
+    let _leader = Leader::new(pile, host.clone());
 
     eprintln!("node: {}", host.id());
     eprintln!("listening... (Ctrl-C to stop)");
