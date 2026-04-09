@@ -63,9 +63,8 @@ fn read_branch_meta(
 pub enum Command {
     /// Show this node's network identity.
     Identity {
-        pile: PathBuf,
         #[arg(long)]
-        signing_key: Option<PathBuf>,
+        key: Option<PathBuf>,
     },
     /// Sync with peers. No topic = serve only. With topic = live bidirectional sync.
     Sync {
@@ -75,7 +74,7 @@ pub enum Command {
         #[arg(long)]
         topic: Option<String>,
         #[arg(long)]
-        signing_key: Option<PathBuf>,
+        key: Option<PathBuf>,
     },
     /// One-shot pull a branch from a remote peer.
     Pull {
@@ -84,26 +83,27 @@ pub enum Command {
         #[arg(long)]
         branch: String,
         #[arg(long)]
-        signing_key: Option<PathBuf>,
+        key: Option<PathBuf>,
     },
 }
 
 pub fn run(cmd: Command) -> Result<()> {
     match cmd {
-        Command::Identity { pile, signing_key } => run_identity(pile, signing_key),
-        Command::Sync { pile, peers, topic, signing_key } => {
-            run_sync(pile, peers, topic, signing_key)
+        Command::Identity { key } => run_identity(key),
+        Command::Sync { pile, peers, topic, key } => {
+            run_sync(pile, peers, topic, key)
         }
-        Command::Pull { pile, remote, branch, signing_key } => {
-            run_pull(pile, remote, branch, signing_key)
+        Command::Pull { pile, remote, branch, key } => {
+            run_pull(pile, remote, branch, key)
         }
     }
 }
 
 // ── Identity ─────────────────────────────────────────────────────────
 
-fn run_identity(pile_path: PathBuf, sk: Option<PathBuf>) -> Result<()> {
-    let key = load_or_create_key(&sk, key_dir(&pile_path))?;
+fn run_identity(sk: Option<PathBuf>) -> Result<()> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let key = load_or_create_key(&sk, &cwd)?;
     let public = triblespace_net::identity::iroh_secret(&key).public();
     println!("node: {public}");
     Ok(())
@@ -111,10 +111,10 @@ fn run_identity(pile_path: PathBuf, sk: Option<PathBuf>) -> Result<()> {
 
 // ── Sync ─────────────────────────────────────────────────────────────
 
-fn run_sync(pile_path: PathBuf, peer_strs: Vec<String>, topic: Option<String>, sk: Option<PathBuf>) -> Result<()> {
+fn run_sync(pile_path: PathBuf, peer_strs: Vec<String>, topic: Option<String>, key_path: Option<PathBuf>) -> Result<()> {
     use triblespace_core::repo::Repository;
 
-    let key = load_or_create_key(&sk, key_dir(&pile_path))?;
+    let key = load_or_create_key(&key_path, key_dir(&pile_path))?;
     let peers = parse_peers(&peer_strs);
     let pile = open_pile(&pile_path)?;
 
@@ -200,10 +200,10 @@ fn run_sync(pile_path: PathBuf, peer_strs: Vec<String>, topic: Option<String>, s
 
 // ── Pull ─────────────────────────────────────────────────────────────
 
-fn run_pull(pile_path: PathBuf, remote: String, branch: String, sk: Option<PathBuf>) -> Result<()> {
+fn run_pull(pile_path: PathBuf, remote: String, branch: String, key_path: Option<PathBuf>) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let key = load_or_create_key(&sk, key_dir(&pile_path))?;
+        let key = load_or_create_key(&key_path, key_dir(&pile_path))?;
         let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
             .secret_key(triblespace_net::identity::iroh_secret(&key))
             .bind().await.map_err(|e| anyhow!("bind: {e}"))?;
