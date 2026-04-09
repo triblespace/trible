@@ -211,12 +211,35 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, sk: Option<PathB
 
 // ── Live ─────────────────────────────────────────────────────────────
 
+/// Extract the commit handle and branch name from a branch metadata blob.
+fn read_branch_meta(store: &mut impl triblespace_core::repo::BlobStore<triblespace_core::value::schemas::hash::Blake3>, head_hash: &[u8; 32]) -> Option<(String, triblespace_core::value::Value<triblespace_core::value::schemas::hash::Handle<triblespace_core::value::schemas::hash::Blake3, triblespace_core::blob::schemas::simplearchive::SimpleArchive>>)> {
+    use triblespace_core::repo::{BlobStore, BlobStoreGet};
+    use triblespace_core::value::Value;
+    type SA = triblespace_core::blob::schemas::simplearchive::SimpleArchive;
+    type LS = triblespace_core::blob::schemas::longstring::LongString;
+    type B3 = triblespace_core::value::schemas::hash::Blake3;
+    type H<S> = triblespace_core::value::schemas::hash::Handle<B3, S>;
+
+    let reader = store.reader().ok()?;
+    let meta: triblespace_core::trible::TribleSet = reader.get(Value::<H<SA>>::new(*head_hash)).ok()?;
+
+    use triblespace_core::macros::{find, pattern};
+    let name_handle: Value<H<LS>> = find!(h: Value<H<LS>>, pattern!(&meta, [{ _?e @ triblespace_core::metadata::name: ?h }])).next()?;
+    let name: anybytes::View<str> = reader.get(name_handle).ok()?;
+    let commit: Value<H<SA>> = find!(h: Value<H<SA>>, pattern!(&meta, [{ _?e @ triblespace_core::repo::head: ?h }])).next()?;
+
+    Some((name.as_ref().to_string(), commit))
+}
+
 fn run_live(pile_path: PathBuf, topic: String, peer_strs: Vec<String>, sk: Option<PathBuf>) -> Result<()> {
+    use triblespace_core::repo::Repository;
+    use std::collections::HashMap;
+
     let key = load_or_create_key(&sk, key_dir(&pile_path))?;
     let peers = parse_peers(&peer_strs);
     let pile = open_pile(&pile_path)?;
 
-    let (sender, receiver) = host::spawn(key, HostConfig {
+    let (sender, receiver) = host::spawn(key.clone(), HostConfig {
         gossip_topic: Some(topic.clone()),
         gossip_peers: peers,
         ..Default::default()
@@ -224,15 +247,77 @@ fn run_live(pile_path: PathBuf, topic: String, peer_strs: Vec<String>, sk: Optio
     let leader = Leader::new(pile, sender.clone());
     let mut follower = Follower::new(leader, receiver);
 
+    // Seed snapshot so we can serve immediately.
+    if let Some(snap) = triblespace_net::host::StoreSnapshot::from_store(&mut follower) {
+        sender.update_snapshot(snap);
+    }
+
     eprintln!("node: {}", sender.id());
     eprintln!("topic: {topic}");
     eprintln!("live sync active. (Ctrl-C to stop)\n");
 
+    // Announce all current branch heads on startup.
+    if let Some(snap) = triblespace_net::host::StoreSnapshot::from_store(&mut follower) {
+        for (branch, head) in &snap.branches {
+            sender.gossip(*branch, *head);
+        }
+        sender.update_snapshot(snap);
+    }
+
+    let mut merged_heads: HashMap<[u8; 16], [u8; 32]> = HashMap::new();
+    let mut last_announce = std::time::Instant::now();
+
     loop {
         let n = follower.poll();
+
+        // Re-announce heads every 10 seconds.
+        if last_announce.elapsed() > std::time::Duration::from_secs(10) {
+            if let Some(snap) = triblespace_net::host::StoreSnapshot::from_store(&mut follower) {
+                for (branch, head) in &snap.branches {
+                    sender.gossip(*branch, *head);
+                }
+                sender.update_snapshot(snap);
+            }
+            last_announce = std::time::Instant::now();
+        }
         if n > 0 {
-            for (branch, head) in follower.remote_heads() {
-                eprintln!("  remote head: {} = {}", hex::encode(branch), hex::encode(&head[..8]));
+            let heads: Vec<_> = follower.remote_heads().iter().map(|(b, h)| (*b, *h)).collect();
+            for (branch_bytes, head_hash) in heads {
+                if merged_heads.get(&branch_bytes) == Some(&head_hash) { continue; }
+                let Some(remote_branch_id) = triblespace_core::id::Id::new(branch_bytes) else { continue; };
+
+                // Read branch name from metadata so we can ensure_branch locally.
+                let Some((name, _)) = read_branch_meta(follower.store_mut(), &head_hash) else { continue; };
+
+                // Merge: pull both branches, merge remote into local.
+                let merge_result = (|| -> Result<()> {
+                    let pile = open_pile(&pile_path)?;
+                    let mut repo = Repository::new(pile, key.clone(), triblespace_core::trible::TribleSet::new())
+                        .map_err(|e| anyhow!("repo: {e:?}"))?;
+                    let local_id = repo.ensure_branch(&name, None).map_err(|_| anyhow!("ensure branch"))?;
+
+                    // Pull remote (Follower wrote its HEAD as a branch pointer).
+                    let remote_ws = repo.pull(remote_branch_id).map_err(|e| anyhow!("pull remote: {e:?}"))?;
+                    let Some(remote_commit) = remote_ws.head() else { return Ok(()); };
+
+                    // Pull local + merge.
+                    let mut local_ws = repo.pull(local_id).map_err(|e| anyhow!("pull local: {e:?}"))?;
+                    local_ws.merge_commit(remote_commit).map_err(|e| anyhow!("merge: {e:?}"))?;
+                    repo.push(&mut local_ws).map_err(|_| anyhow!("push"))?;
+                    let _ = repo.into_storage().close();
+                    Ok(())
+                })();
+
+                match merge_result {
+                    Ok(()) => {
+                        merged_heads.insert(branch_bytes, head_hash);
+                        eprintln!("  merged '{name}'");
+                        if let Some(snap) = triblespace_net::host::StoreSnapshot::from_store(&mut follower) {
+                            sender.update_snapshot(snap);
+                        }
+                    }
+                    Err(e) => eprintln!("  merge error '{name}': {e}"),
+                }
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
