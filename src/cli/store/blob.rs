@@ -4,7 +4,6 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use crate::cli::util::parse_blob_handle;
-use chrono::{DateTime, NaiveDateTime, Utc};
 use object_store::parse_url;
 use triblespace_core::blob::schemas::UnknownBlob;
 use triblespace_core::blob::Bytes;
@@ -65,7 +64,7 @@ pub fn run(cmd: Command) -> Result<()> {
             // Prefer the repo-managed blob listing. Do not fall back to raw
             // listing automatically — bare files were a bug, not a feature.
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
-            let mut reader = remote
+            let reader = remote
                 .reader()
                 .map_err(|e| anyhow::anyhow!("remote reader error: {e:?}"))?;
 
@@ -127,7 +126,7 @@ pub fn run(cmd: Command) -> Result<()> {
         Command::Inspect { url, handle } => {
             use file_type::FileType;
             use object_store::parse_url;
-            use object_store::ObjectStore;
+            
             use triblespace_core::blob::Blob;
 
             let url = Url::parse(&url)?;
@@ -141,20 +140,18 @@ pub fn run(cmd: Command) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("remote reader error: {e:?}"))?;
             let blob: Blob<UnknownBlob> = reader.get(handle_val)?;
 
-            let (store, base) = parse_url(&url)?;
+            let (_store, base) = parse_url(&url)?;
             let handle_hex = handle_str
                 .split(':')
                 .next_back()
                 .ok_or_else(|| anyhow::anyhow!("invalid handle"))?;
-            let path = base.child("blobs").child(handle_hex);
+            let _path = base.join("blobs").join(handle_hex);
             let meta = reader.metadata(handle_val.clone())?;
             let length = meta.as_ref().map(|m| m.length).unwrap_or_default();
             let time_str = if let Some(m) = meta {
                 let secs = (m.timestamp / 1000) as i64;
                 let nsecs = ((m.timestamp % 1000) * 1_000_000) as u32;
-                if let Some(ndt) = chrono::NaiveDateTime::from_timestamp_opt(secs, nsecs) {
-                    let dt: chrono::DateTime<chrono::Utc> =
-                        chrono::DateTime::from_utc(ndt, chrono::Utc);
+                if let Some(dt) = chrono::DateTime::from_timestamp(secs, nsecs) {
                     dt.to_rfc3339()
                 } else {
                     "invalid".to_string()
@@ -175,7 +172,7 @@ pub fn run(cmd: Command) -> Result<()> {
         Command::Forget { url, handle } => {
             let url = Url::parse(&url)?;
             let mut remote: ObjectStoreRemote<Blake3> = ObjectStoreRemote::with_url(&url)?;
-            let (store, path) = parse_url(&url)?;
+            let (_store, _path) = parse_url(&url)?;
             let hash_val = parse_blob_handle(&handle)?;
             let handle_val: triblespace_core::value::Value<Handle<Blake3, UnknownBlob>> =
                 hash_val.into();

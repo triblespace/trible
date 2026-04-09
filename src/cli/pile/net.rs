@@ -170,7 +170,7 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, sk: Option<PathB
     // Merge using Repository.
     use triblespace_core::repo::{BlobStore, BlobStoreGet, Repository};
     use triblespace_core::value::Value;
-    let local_branch_id = {
+    let _local_branch_id = {
         let mut repo = Repository::new(follower, key.clone(), triblespace_core::trible::TribleSet::new())
             .map_err(|e| anyhow!("repo: {e:?}"))?;
         let local_id = repo.ensure_branch(&branch, None)

@@ -23,41 +23,6 @@ pub(super) fn load_signing_key(path_opt: &Option<PathBuf>) -> Result<SigningKey,
     generate_ephemeral_key()
 }
 
-/// Load or create a persistent signing key for a pile.
-///
-/// Resolution order:
-/// 1. Explicit `--signing-key <path>` flag
-/// 2. `TRIBLES_SIGNING_KEY` env var
-/// 3. `<pile-path>.key` — auto-created on first use
-///
-/// The key file contains a 64-char hex seed.  On first use a new key
-/// is generated and written to the file, then loaded.
-pub(super) fn load_or_create_pile_key(
-    explicit_path: &Option<PathBuf>,
-    pile_path: &Path,
-) -> Result<SigningKey, anyhow::Error> {
-    // 1. Explicit path
-    if let Some(p) = explicit_path {
-        return load_key_from_file(p);
-    }
-    // 2. Env var
-    if let Ok(s) = env::var("TRIBLES_SIGNING_KEY") {
-        return load_key_from_file(&PathBuf::from(s));
-    }
-    // 3. Auto-discover/create next to pile
-    let key_path = pile_path.with_extension("pile.key");
-    if key_path.exists() {
-        return load_key_from_file(&key_path);
-    }
-    // Generate and persist
-    let key = generate_ephemeral_key()?;
-    let hex_str = hex::encode(key.to_bytes());
-    fs::write(&key_path, &hex_str)
-        .map_err(|e| anyhow::anyhow!("failed to write key to {}: {e}", key_path.display()))?;
-    eprintln!("generated new node key: {}", key_path.display());
-    Ok(key)
-}
-
 fn load_key_from_file(p: &Path) -> Result<SigningKey, anyhow::Error> {
     let content = fs::read_to_string(p)
         .map_err(|e| anyhow::anyhow!("failed to read signing key {}: {e}", p.display()))?;
