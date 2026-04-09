@@ -166,13 +166,17 @@ fn run_sync(pile_path: PathBuf, peer_strs: Vec<String>, topic: Option<String>, k
                 let Some(remote_branch_id) = triblespace_core::id::Id::new(branch_bytes) else { continue; };
                 let Some((name, _)) = read_branch_meta(follower.store_mut(), &head_hash) else { continue; };
 
+                // Find the tracking branch (created by Follower).
+                let Some(tracking_id) = triblespace_net::tracking::find_tracking_branch(follower.store_mut(), remote_branch_id) else { continue; };
+
                 let merge_result = (|| -> Result<()> {
                     let pile = open_pile(&pile_path)?;
                     let mut repo = Repository::new(pile, key.clone(), triblespace_core::trible::TribleSet::new())
                         .map_err(|e| anyhow!("repo: {e:?}"))?;
                     let local_id = repo.ensure_branch(&name, None).map_err(|_| anyhow!("ensure branch"))?;
 
-                    let remote_ws = repo.pull(remote_branch_id).map_err(|e| anyhow!("pull remote: {e:?}"))?;
+                    // Pull from tracking branch (has remote_name, invisible to ensure_branch).
+                    let remote_ws = repo.pull(tracking_id).map_err(|e| anyhow!("pull tracking: {e:?}"))?;
                     let Some(remote_commit) = remote_ws.head() else { return Ok(()); };
 
                     let mut local_ws = repo.pull(local_id).map_err(|e| anyhow!("pull local: {e:?}"))?;
