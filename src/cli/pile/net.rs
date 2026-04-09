@@ -39,7 +39,7 @@ fn read_branch_meta(
         triblespace_core::blob::schemas::simplearchive::SimpleArchive,
     >>,
 )> {
-    use triblespace_core::repo::{BlobStore, BlobStoreGet};
+    use triblespace_core::repo::BlobStoreGet;
     use triblespace_core::value::Value;
     type SA = triblespace_core::blob::schemas::simplearchive::SimpleArchive;
     type LS = triblespace_core::blob::schemas::longstring::LongString;
