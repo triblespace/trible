@@ -161,80 +161,69 @@ fn run_sync(pile_path: PathBuf, peer_strs: Vec<String>, topic: Option<String>, k
 // ── Pull ─────────────────────────────────────────────────────────────
 
 fn run_pull(pile_path: PathBuf, remote: String, branch: String, key_path: Option<PathBuf>) -> Result<()> {
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        let key = load_or_create_key(&key_path, key_dir(&pile_path))?;
+    let key = load_or_create_key(&key_path, key_dir(&pile_path))?;
 
-        // Resolve the branch name on the remote via a one-shot connection.
-        // This runs before we spin up the Peer's persistent network thread.
-        let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
-            .secret_key(triblespace_net::identity::iroh_secret(&key))
-            .bind().await.map_err(|e| anyhow!("bind: {e}"))?;
+    let remote_key: iroh_base::PublicKey = remote.parse()
+        .map_err(|e| anyhow!("bad node ID: {e}"))?;
+    let remote_endpoint: iroh_base::EndpointId = remote_key.into();
 
-        let remote_key: iroh_base::PublicKey = remote.parse()
-            .map_err(|e| anyhow!("bad node ID: {e}"))?;
+    // Spin up the Peer — pull-only mode (gossip_topic: None), no flood
+    // subscription, just direct fetch + DHT. The same network thread is
+    // used for both the name-resolution RPCs and the reachable-closure
+    // fetch, so no side Endpoint is needed.
+    use triblespace_core::repo::Repository;
+    let pile = open_pile(&pile_path)?;
+    let peer = Peer::new(pile, key.clone(), PeerConfig::default());
+    let mut repo = Repository::new(peer, key.clone(), triblespace_core::trible::TribleSet::new())
+        .map_err(|e| anyhow!("repo: {e:?}"))?;
 
-        eprintln!("connecting to {}...", remote_key.fmt_short());
-        let conn = ep.connect(remote_key, triblespace_net::protocol::PILE_SYNC_ALPN).await
-            .map_err(|e| anyhow!("connect: {e}"))?;
+    eprintln!("connecting to {}...", remote_key.fmt_short());
+    let (remote_id, _) = triblespace_net::peer::resolve_branch_name(
+        repo.storage_mut(), remote_endpoint, &branch,
+    )?.ok_or_else(|| anyhow!("branch '{branch}' not found"))?;
+    let branch_id_bytes: [u8; 16] = remote_id.into();
 
-        let (remote_id, _) = triblespace_net::protocol::resolve_branch_name(&conn, &branch).await?
-            .ok_or_else(|| anyhow!("branch '{branch}' not found"))?;
-        let branch_id_bytes: [u8; 16] = remote_id.into();
-        conn.close(0u32.into(), b"done");
-        ep.close().await;
+    repo.storage().fetch(remote_endpoint, branch_id_bytes);
+    eprintln!("syncing...");
 
-        // Spin up the Peer for the fetch + merge. Pull-only mode
-        // (gossip_topic: None) — no flood subscription, just direct fetch
-        // + DHT.
-        use triblespace_core::repo::Repository;
-        let pile = open_pile(&pile_path)?;
-        let peer = Peer::new(pile, key.clone(), PeerConfig::default());
-        let mut repo = Repository::new(peer, key.clone(), triblespace_core::trible::TribleSet::new())
-            .map_err(|e| anyhow!("repo: {e:?}"))?;
-
-        repo.storage().fetch(remote_key.into(), branch_id_bytes);
-        eprintln!("syncing...");
-
-        // Spin until the Peer has materialized a tracking branch for the
-        // remote. find_tracking_branch reads via branches() which
-        // auto-refreshes the Peer (drains incoming gossip events).
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        let tracking_id = loop {
-            if let Some(id) = triblespace_net::tracking::find_tracking_branch(
-                repo.storage_mut(), remote_id,
-            ) {
-                break id;
-            }
-            if std::time::Instant::now() > deadline {
-                return Err(anyhow!("timed out waiting for remote HEAD"));
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        };
-
-        let name = triblespace_net::tracking::list_tracking_branches(repo.storage_mut())
-            .into_iter()
-            .find(|info| info.local_id == tracking_id)
-            .ok_or_else(|| anyhow!("tracking branch vanished"))?
-            .remote_name;
-
-        // `merge_commit` decides between no-op / fast-forward / merge commit.
-        let local_id = repo.ensure_branch(&name, None).map_err(|_| anyhow!("ensure branch"))?;
-        let remote_ws = repo.pull(tracking_id).map_err(|e| anyhow!("pull tracking: {e:?}"))?;
-        let Some(remote_commit) = remote_ws.head() else {
-            return Err(anyhow!("remote has no commit"));
-        };
-        let mut local_ws = repo.pull(local_id).map_err(|e| anyhow!("pull local: {e:?}"))?;
-        let prev_head = local_ws.head();
-        let new_head = local_ws.merge_commit(remote_commit)
-            .map_err(|e| anyhow!("merge: {e:?}"))?;
-        if Some(new_head) != prev_head {
-            repo.push(&mut local_ws).map_err(|_| anyhow!("push"))?;
+    // Spin until the Peer has materialized a tracking branch for the
+    // remote. find_tracking_branch reads via branches() which
+    // auto-refreshes the Peer (drains incoming gossip events).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let tracking_id = loop {
+        if let Some(id) = triblespace_net::tracking::find_tracking_branch(
+            repo.storage_mut(), remote_id,
+        ) {
+            break id;
         }
-        // Repository<Peer<Pile>> → unwrap layers and close the pile.
-        let _ = repo.into_storage().into_store().close();
+        if std::time::Instant::now() > deadline {
+            return Err(anyhow!("timed out waiting for remote HEAD"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
 
-        eprintln!("merged '{name}'");
-        Ok(())
-    })
+    let name = triblespace_net::tracking::list_tracking_branches(repo.storage_mut())
+        .into_iter()
+        .find(|info| info.local_id == tracking_id)
+        .ok_or_else(|| anyhow!("tracking branch vanished"))?
+        .remote_name;
+
+    // `merge_commit` decides between no-op / fast-forward / merge commit.
+    let local_id = repo.ensure_branch(&name, None).map_err(|_| anyhow!("ensure branch"))?;
+    let remote_ws = repo.pull(tracking_id).map_err(|e| anyhow!("pull tracking: {e:?}"))?;
+    let Some(remote_commit) = remote_ws.head() else {
+        return Err(anyhow!("remote has no commit"));
+    };
+    let mut local_ws = repo.pull(local_id).map_err(|e| anyhow!("pull local: {e:?}"))?;
+    let prev_head = local_ws.head();
+    let new_head = local_ws.merge_commit(remote_commit)
+        .map_err(|e| anyhow!("merge: {e:?}"))?;
+    if Some(new_head) != prev_head {
+        repo.push(&mut local_ws).map_err(|_| anyhow!("push"))?;
+    }
+    // Repository<Peer<Pile>> → unwrap layers and close the pile.
+    let _ = repo.into_storage().into_store().close();
+
+    eprintln!("merged '{name}'");
+    Ok(())
 }
