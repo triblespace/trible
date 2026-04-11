@@ -183,7 +183,7 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, key_path: Option
     )?.ok_or_else(|| anyhow!("branch '{branch}' not found"))?;
     let branch_id_bytes: [u8; 16] = remote_id.into();
 
-    repo.storage().fetch(remote_endpoint, branch_id_bytes);
+    repo.storage().track(remote_endpoint, branch_id_bytes);
     eprintln!("syncing...");
 
     // Spin until the Peer has materialized a tracking branch for the
