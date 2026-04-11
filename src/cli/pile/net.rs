@@ -1,7 +1,6 @@
 //! CLI commands for distributed pile sync.
 
 use std::path::PathBuf;
-use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
@@ -26,35 +25,6 @@ fn parse_peers(strs: &[String]) -> Vec<EndpointId> {
 
 fn key_dir(pile_path: &PathBuf) -> &std::path::Path {
     pile_path.parent().unwrap_or(pile_path.as_ref())
-}
-
-/// Extract branch name + commit handle from a branch metadata blob.
-fn read_branch_meta(
-    store: &mut impl triblespace_core::repo::BlobStore<triblespace_core::value::schemas::hash::Blake3>,
-    head_hash: &[u8; 32],
-) -> Option<(
-    String,
-    triblespace_core::value::Value<triblespace_core::value::schemas::hash::Handle<
-        triblespace_core::value::schemas::hash::Blake3,
-        triblespace_core::blob::schemas::simplearchive::SimpleArchive,
-    >>,
-)> {
-    use triblespace_core::repo::BlobStoreGet;
-    use triblespace_core::value::Value;
-    type SA = triblespace_core::blob::schemas::simplearchive::SimpleArchive;
-    type LS = triblespace_core::blob::schemas::longstring::LongString;
-    type B3 = triblespace_core::value::schemas::hash::Blake3;
-    type H<S> = triblespace_core::value::schemas::hash::Handle<B3, S>;
-
-    let reader = store.reader().ok()?;
-    let meta: triblespace_core::trible::TribleSet = reader.get(Value::<H<SA>>::new(*head_hash)).ok()?;
-
-    use triblespace_core::macros::{find, pattern};
-    let nh: Value<H<LS>> = find!(h: Value<H<LS>>, pattern!(&meta, [{ _?e @ triblespace_core::metadata::name: ?h }])).next()?;
-    let name: anybytes::View<str> = reader.get(nh).ok()?;
-    let commit: Value<H<SA>> = find!(h: Value<H<SA>>, pattern!(&meta, [{ _?e @ triblespace_core::repo::head: ?h }])).next()?;
-
-    Some((name.as_ref().to_string(), commit))
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────
@@ -111,27 +81,50 @@ fn run_identity(sk: Option<PathBuf>) -> Result<()> {
 
 // ── Sync ─────────────────────────────────────────────────────────────
 
+/// Snapshot the store's non-tracking branches and gossip them.
+///
+/// Tracking branches are local mirror state — they're created by the
+/// Follower from incoming gossip and shouldn't be re-announced or they'd
+/// echo back to the publisher and create extra tracking branches.
+fn publish_non_tracking_branches<S>(store: &mut S, sender: &triblespace_net::host::HostSender)
+where
+    S: triblespace_core::repo::BlobStore<triblespace_core::value::schemas::hash::Blake3>
+        + triblespace_core::repo::BranchStore<triblespace_core::value::schemas::hash::Blake3>,
+{
+    let Some(snap) = triblespace_net::host::StoreSnapshot::from_store(store) else { return };
+    for (branch, head) in &snap.branches {
+        if let Some(bid) = triblespace_core::id::Id::new(*branch) {
+            if triblespace_net::tracking::is_tracking_branch(store, bid) {
+                continue;
+            }
+        }
+        sender.gossip(*branch, *head);
+    }
+    sender.update_snapshot(snap);
+}
+
 fn run_sync(pile_path: PathBuf, peer_strs: Vec<String>, topic: Option<String>, key_path: Option<PathBuf>) -> Result<()> {
     use triblespace_core::repo::Repository;
 
     let key = load_or_create_key(&key_path, key_dir(&pile_path))?;
     let peers = parse_peers(&peer_strs);
-    let pile = open_pile(&pile_path)?;
 
     let (sender, receiver) = host::spawn(key.clone(), HostConfig {
         peers,
         gossip_topic: topic.clone(),
     });
+    // Single pile handle, layered:
+    //   Repository<Follower<Leader<Pile>>>
+    // Leader gossips writes; Follower drains incoming gossip events into the
+    // SAME pile via `Poll`; Repository is what the merge code drives.
+    // `repo.poll()` cascades through every layer in one call.
+    let pile = open_pile(&pile_path)?;
     let leader = Leader::new(pile, sender.clone());
-    let mut follower = Follower::new(leader, receiver);
+    let follower = Follower::new(leader, receiver);
+    let mut repo = Repository::new(follower, key.clone(), triblespace_core::trible::TribleSet::new())
+        .map_err(|e| anyhow!("repo: {e:?}"))?;
 
-    // Seed snapshot for serving.
-    if let Some(snap) = triblespace_net::host::StoreSnapshot::from_store(&mut follower) {
-        for (branch, head) in &snap.branches {
-            sender.gossip(*branch, *head);
-        }
-        sender.update_snapshot(snap);
-    }
+    publish_non_tracking_branches(repo.storage_mut(), &sender);
 
     eprintln!("node: {}", sender.id());
     if let Some(ref t) = topic {
@@ -141,81 +134,60 @@ fn run_sync(pile_path: PathBuf, peer_strs: Vec<String>, topic: Option<String>, k
         eprintln!("serving. (Ctrl-C to stop)");
     }
 
-    let mut merged_heads: HashMap<[u8; 16], [u8; 32]> = HashMap::new();
     let mut last_announce = std::time::Instant::now();
 
     loop {
-        let n = follower.poll();
+        let n = repo.poll().map_err(|e| anyhow!("poll: {e:?}"))?;
 
         // Re-announce heads periodically.
         if topic.is_some() && last_announce.elapsed() > std::time::Duration::from_secs(10) {
-            if let Some(snap) = triblespace_net::host::StoreSnapshot::from_store(&mut follower) {
-                for (branch, head) in &snap.branches {
-                    sender.gossip(*branch, *head);
-                }
-                sender.update_snapshot(snap);
-            }
+            publish_non_tracking_branches(repo.storage_mut(), &sender);
             last_announce = std::time::Instant::now();
         }
 
-        // Auto-merge incoming remote heads.
+        // Auto-merge: walk the tracking branches in the pile and merge each
+        // into its same-named local branch. The ancestor checks below cover
+        // dedup — if remote is already in our ancestry (or vice-versa) the
+        // merge is a no-op or a fast-forward. No in-memory cache needed.
         if n > 0 {
-            let heads: Vec<_> = follower.remote_heads().iter().map(|(b, h)| (*b, *h)).collect();
-            for (branch_bytes, head_hash) in heads {
-                if merged_heads.get(&branch_bytes) == Some(&head_hash) { continue; }
-                let Some(remote_branch_id) = triblespace_core::id::Id::new(branch_bytes) else { continue; };
-                let Some((name, _)) = read_branch_meta(follower.store_mut(), &head_hash) else { continue; };
+            let tracks = triblespace_net::tracking::list_tracking_branches(repo.storage_mut());
+            let mut any_merged = false;
+            for info in tracks {
+                let triblespace_net::tracking::TrackingBranchInfo {
+                    local_id: tracking_id,
+                    remote_name: name,
+                    ..
+                } = info;
 
-                // Find the tracking branch (created by Follower).
-                let Some(tracking_id) = triblespace_net::tracking::find_tracking_branch(follower.store_mut(), remote_branch_id) else { continue; };
-
-                let merge_result = (|| -> Result<()> {
-                    let pile = open_pile(&pile_path)?;
-                    let mut repo = Repository::new(pile, key.clone(), triblespace_core::trible::TribleSet::new())
-                        .map_err(|e| anyhow!("repo: {e:?}"))?;
+                let merge_result = (|| -> Result<bool> {
                     let local_id = repo.ensure_branch(&name, None).map_err(|_| anyhow!("ensure branch"))?;
-
-                    // Pull from tracking branch (has remote_name, invisible to ensure_branch).
                     let remote_ws = repo.pull(tracking_id).map_err(|e| anyhow!("pull tracking: {e:?}"))?;
-                    let Some(remote_commit) = remote_ws.head() else { return Ok(()); };
+                    let Some(remote_commit) = remote_ws.head() else { return Ok(false); };
 
                     let mut local_ws = repo.pull(local_id).map_err(|e| anyhow!("pull local: {e:?}"))?;
-
-                    // Skip if remote commit is already our head or an ancestor.
-                    if let Some(local_head) = local_ws.head() {
-                        if local_head == remote_commit {
-                            return Ok(()); // Same commit — nothing to merge.
-                        }
-                        // Check if remote is an ancestor of local.
-                        use triblespace_core::repo::{ancestors, CommitSelector};
-                        let all_ancestors = ancestors(local_head)
-                            .select(&mut local_ws)
-                            .map_err(|e| anyhow!("ancestors: {e:?}"))?;
-                        if all_ancestors.get(&remote_commit.raw).is_some() {
-                            return Ok(()); // Remote is already an ancestor — skip.
-                        }
+                    let prev_head = local_ws.head();
+                    let new_head = local_ws.merge_commit(remote_commit)
+                        .map_err(|e| anyhow!("merge: {e:?}"))?;
+                    if Some(new_head) == prev_head {
+                        // No-op (already up to date) — nothing to push.
+                        return Ok(false);
                     }
-
-                    local_ws.merge_commit(remote_commit).map_err(|e| anyhow!("merge: {e:?}"))?;
                     repo.push(&mut local_ws).map_err(|_| anyhow!("push"))?;
-                    let _ = repo.into_storage().close();
-                    Ok(())
+                    Ok(true)
                 })();
 
                 match merge_result {
-                    Ok(()) => {
-                        merged_heads.insert(branch_bytes, head_hash);
+                    Ok(true) => {
                         eprintln!("  merged '{name}'");
-                        // Refresh snapshot + gossip all branches (merge changed heads).
-                        if let Some(snap) = triblespace_net::host::StoreSnapshot::from_store(&mut follower) {
-                            for (b, h) in &snap.branches {
-                                sender.gossip(*b, *h);
-                            }
-                            sender.update_snapshot(snap);
-                        }
+                        any_merged = true;
                     }
+                    Ok(false) => { /* up-to-date, no-op */ }
                     Err(e) => eprintln!("  merge error '{name}': {e}"),
                 }
+            }
+
+            if any_merged {
+                publish_non_tracking_branches(repo.storage_mut(), &sender);
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -243,44 +215,59 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, key_path: Option
             .ok_or_else(|| anyhow!("branch '{branch}' not found"))?;
         let branch_id_bytes: [u8; 16] = remote_id.into();
 
-        // Fetch via Host (gets DHT for free).
+        // Single pile handle, layered Repository<Follower<Leader<Pile>>>.
+        // `repo.poll()` cascades through every layer.
+        use triblespace_core::repo::Repository;
         let (sender, receiver) = host::spawn(key.clone(), HostConfig::default());
-        let leader = Leader::new(open_pile(&pile_path)?, sender.clone());
-        let mut follower = Follower::new(leader, receiver);
+        let pile = open_pile(&pile_path)?;
+        let leader = Leader::new(pile, sender.clone());
+        let follower = Follower::new(leader, receiver);
+        let mut repo = Repository::new(follower, key.clone(), triblespace_core::trible::TribleSet::new())
+            .map_err(|e| anyhow!("repo: {e:?}"))?;
 
         sender.fetch(remote_key.into(), branch_id_bytes);
         eprintln!("syncing...");
 
-        // Poll until HEAD arrives (timeout after 30s).
+        // Poll until the Follower has materialized a tracking branch for the
+        // remote — that's the canonical signal that gossip arrived and was
+        // applied to the pile.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        loop {
-            follower.poll();
-            if follower.remote_head_raw(&branch_id_bytes).is_some() { break; }
+        let tracking_id = loop {
+            repo.poll().map_err(|e| anyhow!("poll: {e:?}"))?;
+            if let Some(id) = triblespace_net::tracking::find_tracking_branch(
+                repo.storage_mut(), remote_id,
+            ) {
+                break id;
+            }
             if std::time::Instant::now() > deadline {
                 return Err(anyhow!("timed out waiting for remote HEAD"));
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-
-        let head_hash = follower.remote_head_raw(&branch_id_bytes).unwrap();
-        let Some((name, _)) = read_branch_meta(follower.store_mut(), &head_hash) else {
-            return Err(anyhow!("can't read branch metadata"));
         };
 
-        // Merge.
-        use triblespace_core::repo::Repository;
-        let pile = open_pile(&pile_path)?;
-        let mut repo = Repository::new(pile, key.clone(), triblespace_core::trible::TribleSet::new())
-            .map_err(|e| anyhow!("repo: {e:?}"))?;
+        // Read the remote name from the tracking branch metadata.
+        let name = triblespace_net::tracking::list_tracking_branches(repo.storage_mut())
+            .into_iter()
+            .find(|info| info.local_id == tracking_id)
+            .ok_or_else(|| anyhow!("tracking branch vanished"))?
+            .remote_name;
+
+        // Merge through the Repository (same pile as the Follower wrote to).
+        // `merge_commit` decides between no-op / fast-forward / merge commit.
         let local_id = repo.ensure_branch(&name, None).map_err(|_| anyhow!("ensure branch"))?;
-        let remote_ws = repo.pull(remote_id).map_err(|e| anyhow!("pull remote: {e:?}"))?;
+        let remote_ws = repo.pull(tracking_id).map_err(|e| anyhow!("pull tracking: {e:?}"))?;
         let Some(remote_commit) = remote_ws.head() else {
             return Err(anyhow!("remote has no commit"));
         };
         let mut local_ws = repo.pull(local_id).map_err(|e| anyhow!("pull local: {e:?}"))?;
-        local_ws.merge_commit(remote_commit).map_err(|e| anyhow!("merge: {e:?}"))?;
-        repo.push(&mut local_ws).map_err(|_| anyhow!("push"))?;
-        let _ = repo.into_storage().close();
+        let prev_head = local_ws.head();
+        let new_head = local_ws.merge_commit(remote_commit)
+            .map_err(|e| anyhow!("merge: {e:?}"))?;
+        if Some(new_head) != prev_head {
+            repo.push(&mut local_ws).map_err(|_| anyhow!("push"))?;
+        }
+        // Repository<Follower<Leader<Pile>>> → unwrap layers and close the pile.
+        let _ = repo.into_storage().into_store().into_store().close();
 
         eprintln!("merged '{name}'");
         conn.close(0u32.into(), b"done");
