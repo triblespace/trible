@@ -137,8 +137,6 @@ fn run_sync(pile_path: PathBuf, peer_strs: Vec<String>, topic: Option<String>, k
     let mut last_announce = std::time::Instant::now();
 
     loop {
-        let n = repo.poll().map_err(|e| anyhow!("poll: {e:?}"))?;
-
         // Re-announce heads periodically.
         if topic.is_some() && last_announce.elapsed() > std::time::Duration::from_secs(10) {
             publish_non_tracking_branches(repo.storage_mut(), &sender);
@@ -146,50 +144,50 @@ fn run_sync(pile_path: PathBuf, peer_strs: Vec<String>, topic: Option<String>, k
         }
 
         // Auto-merge: walk the tracking branches in the pile and merge each
-        // into its same-named local branch. The ancestor checks below cover
-        // dedup — if remote is already in our ancestry (or vice-versa) the
-        // merge is a no-op or a fast-forward. No in-memory cache needed.
-        if n > 0 {
-            let tracks = triblespace_net::tracking::list_tracking_branches(repo.storage_mut());
-            let mut any_merged = false;
-            for info in tracks {
-                let triblespace_net::tracking::TrackingBranchInfo {
-                    local_id: tracking_id,
-                    remote_name: name,
-                    ..
-                } = info;
+        // into its same-named local branch. The Follower auto-drains the
+        // gossip channel on every read (just like Pile auto-refreshes from
+        // disk), so list_tracking_branches always sees the latest state.
+        // The ancestor checks inside merge_commit handle dedup.
+        let tracks = triblespace_net::tracking::list_tracking_branches(repo.storage_mut());
+        let mut any_merged = false;
+        for info in tracks {
+            let triblespace_net::tracking::TrackingBranchInfo {
+                local_id: tracking_id,
+                remote_name: name,
+                ..
+            } = info;
 
-                let merge_result = (|| -> Result<bool> {
-                    let local_id = repo.ensure_branch(&name, None).map_err(|_| anyhow!("ensure branch"))?;
-                    let remote_ws = repo.pull(tracking_id).map_err(|e| anyhow!("pull tracking: {e:?}"))?;
-                    let Some(remote_commit) = remote_ws.head() else { return Ok(false); };
+            let merge_result = (|| -> Result<bool> {
+                let local_id = repo.ensure_branch(&name, None).map_err(|_| anyhow!("ensure branch"))?;
+                let remote_ws = repo.pull(tracking_id).map_err(|e| anyhow!("pull tracking: {e:?}"))?;
+                let Some(remote_commit) = remote_ws.head() else { return Ok(false); };
 
-                    let mut local_ws = repo.pull(local_id).map_err(|e| anyhow!("pull local: {e:?}"))?;
-                    let prev_head = local_ws.head();
-                    let new_head = local_ws.merge_commit(remote_commit)
-                        .map_err(|e| anyhow!("merge: {e:?}"))?;
-                    if Some(new_head) == prev_head {
-                        // No-op (already up to date) — nothing to push.
-                        return Ok(false);
-                    }
-                    repo.push(&mut local_ws).map_err(|_| anyhow!("push"))?;
-                    Ok(true)
-                })();
-
-                match merge_result {
-                    Ok(true) => {
-                        eprintln!("  merged '{name}'");
-                        any_merged = true;
-                    }
-                    Ok(false) => { /* up-to-date, no-op */ }
-                    Err(e) => eprintln!("  merge error '{name}': {e}"),
+                let mut local_ws = repo.pull(local_id).map_err(|e| anyhow!("pull local: {e:?}"))?;
+                let prev_head = local_ws.head();
+                let new_head = local_ws.merge_commit(remote_commit)
+                    .map_err(|e| anyhow!("merge: {e:?}"))?;
+                if Some(new_head) == prev_head {
+                    // No-op (already up to date) — nothing to push.
+                    return Ok(false);
                 }
-            }
+                repo.push(&mut local_ws).map_err(|_| anyhow!("push"))?;
+                Ok(true)
+            })();
 
-            if any_merged {
-                publish_non_tracking_branches(repo.storage_mut(), &sender);
+            match merge_result {
+                Ok(true) => {
+                    eprintln!("  merged '{name}'");
+                    any_merged = true;
+                }
+                Ok(false) => { /* up-to-date, no-op */ }
+                Err(e) => eprintln!("  merge error '{name}': {e}"),
             }
         }
+
+        if any_merged {
+            publish_non_tracking_branches(repo.storage_mut(), &sender);
+        }
+
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
@@ -228,12 +226,12 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, key_path: Option
         sender.fetch(remote_key.into(), branch_id_bytes);
         eprintln!("syncing...");
 
-        // Poll until the Follower has materialized a tracking branch for the
-        // remote — that's the canonical signal that gossip arrived and was
-        // applied to the pile.
+        // Spin until the Follower has materialized a tracking branch for the
+        // remote. find_tracking_branch iterates `branches()`, which auto-
+        // drains the gossip channel via Follower's read path — no explicit
+        // poll needed.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let tracking_id = loop {
-            repo.poll().map_err(|e| anyhow!("poll: {e:?}"))?;
             if let Some(id) = triblespace_net::tracking::find_tracking_branch(
                 repo.storage_mut(), remote_id,
             ) {
