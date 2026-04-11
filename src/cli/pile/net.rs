@@ -121,8 +121,7 @@ fn run_sync(pile_path: PathBuf, peer_strs: Vec<String>, topic: Option<String>, k
         // Auto-merge: walk the tracking branches in the pile and merge each
         // into its same-named local branch. The Peer auto-refreshes on every
         // read (drains gossip + diffs external writes), so list_tracking_branches
-        // always sees the latest state. The ancestor checks inside merge_commit
-        // handle dedup.
+        // always sees the latest state.
         let tracks = triblespace_net::tracking::list_tracking_branches(repo.storage_mut());
         for info in tracks {
             let triblespace_net::tracking::TrackingBranchInfo {
@@ -131,25 +130,11 @@ fn run_sync(pile_path: PathBuf, peer_strs: Vec<String>, topic: Option<String>, k
                 ..
             } = info;
 
-            let merge_result = (|| -> Result<bool> {
-                let local_id = repo.ensure_branch(&name, None).map_err(|_| anyhow!("ensure branch"))?;
-                let remote_ws = repo.pull(tracking_id).map_err(|e| anyhow!("pull tracking: {e:?}"))?;
-                let Some(remote_commit) = remote_ws.head() else { return Ok(false); };
-
-                let mut local_ws = repo.pull(local_id).map_err(|e| anyhow!("pull local: {e:?}"))?;
-                let prev_head = local_ws.head();
-                let new_head = local_ws.merge_commit(remote_commit)
-                    .map_err(|e| anyhow!("merge: {e:?}"))?;
-                if Some(new_head) == prev_head {
-                    return Ok(false);
+            match triblespace_net::tracking::merge_tracking_into_local(&mut repo, tracking_id, &name) {
+                Ok(triblespace_net::tracking::MergeOutcome::Merged { .. }) => {
+                    eprintln!("  merged '{name}'");
                 }
-                repo.push(&mut local_ws).map_err(|_| anyhow!("push"))?;
-                Ok(true)
-            })();
-
-            match merge_result {
-                Ok(true) => eprintln!("  merged '{name}'"),
-                Ok(false) => { /* up-to-date, no-op */ }
+                Ok(_) => { /* up-to-date or empty, no-op */ }
                 Err(e) => eprintln!("  merge error '{name}': {e}"),
             }
         }
@@ -179,18 +164,11 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, key_path: Option
     eprintln!("syncing...");
     let tracking_id = repo.storage_mut().pull_branch(remote_endpoint, &branch)?;
 
-    // `merge_commit` decides between no-op / fast-forward / merge commit.
-    let local_id = repo.ensure_branch(&branch, None).map_err(|_| anyhow!("ensure branch"))?;
-    let remote_ws = repo.pull(tracking_id).map_err(|e| anyhow!("pull tracking: {e:?}"))?;
-    let Some(remote_commit) = remote_ws.head() else {
+    let outcome = triblespace_net::tracking::merge_tracking_into_local(
+        &mut repo, tracking_id, &branch,
+    )?;
+    if matches!(outcome, triblespace_net::tracking::MergeOutcome::Empty) {
         return Err(anyhow!("remote has no commit"));
-    };
-    let mut local_ws = repo.pull(local_id).map_err(|e| anyhow!("pull local: {e:?}"))?;
-    let prev_head = local_ws.head();
-    let new_head = local_ws.merge_commit(remote_commit)
-        .map_err(|e| anyhow!("merge: {e:?}"))?;
-    if Some(new_head) != prev_head {
-        repo.push(&mut local_ws).map_err(|_| anyhow!("push"))?;
     }
     let _ = repo.into_storage().into_store().close();
 
