@@ -164,14 +164,16 @@ fn run_pull(pile_path: PathBuf, remote: String, branch: String, key_path: Option
     eprintln!("syncing...");
     let tracking_id = repo.storage_mut().pull_branch(remote_endpoint, &branch)?;
 
+    use triblespace_net::tracking::MergeOutcome;
     let outcome = triblespace_net::tracking::merge_tracking_into_local(
         &mut repo, tracking_id, &branch,
     )?;
-    if matches!(outcome, triblespace_net::tracking::MergeOutcome::Empty) {
-        return Err(anyhow!("remote has no commit"));
-    }
     let _ = repo.into_storage().into_store().close();
 
-    eprintln!("merged '{branch}'");
+    match outcome {
+        MergeOutcome::Empty => return Err(anyhow!("remote has no commit")),
+        MergeOutcome::UpToDate => eprintln!("up to date '{branch}'"),
+        MergeOutcome::Merged { .. } => eprintln!("merged '{branch}'"),
+    }
     Ok(())
 }
